@@ -1,0 +1,29 @@
+[package]
+name = "streamdeck-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Unofficial Stream Deck plugin SDK for Rust"
+publish = false
+readme = "README.md"
+keywords = ["streamdeck", "elgato", "plugin", "sdk"]
+categories = ["api-bindings"]
+
+[lib]
+name = "streamdeck"
+path = "src/lib.rs"
+
+[dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_repr = "0.1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync", "fs", "io-util"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync", "io-util"] }

@@ -1,0 +1,39 @@
+use serde::{Deserialize, Serialize};
+use streamdeck::{KeyDownEvent, SingletonAction, WillAppearEvent};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct CounterSettings {
+    #[serde(default)]
+    count: u32,
+    #[serde(default = "default_increment", rename = "incrementBy")]
+    increment_by: u32,
+}
+
+fn default_increment() -> u32 {
+    1
+}
+
+pub struct IncrementCounter;
+
+impl SingletonAction for IncrementCounter {
+    const UUID: &'static str = "{{uuid}}.increment";
+    type Settings = CounterSettings;
+
+    async fn on_will_appear(&self, ev: WillAppearEvent<Self::Settings>) {
+        let count = ev.payload.settings.count;
+        if let Some(key) = ev.action.as_key() {
+            let _ = key.set_title(count.to_string()).await;
+        }
+    }
+
+    async fn on_key_down(&self, ev: KeyDownEvent<Self::Settings>) {
+        let increment = ev.payload.settings.increment_by.max(1);
+        let count = ev.payload.settings.count.saturating_add(increment);
+        let settings = CounterSettings {
+            count,
+            increment_by: increment,
+        };
+        let _ = ev.action.set_settings(settings).await;
+        let _ = ev.action.set_title(count.to_string()).await;
+    }
+}
