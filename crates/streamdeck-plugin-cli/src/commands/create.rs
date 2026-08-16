@@ -141,8 +141,12 @@ fn prompt_plugin_info() -> Result<PluginInfo> {
     })
 }
 
+fn default_directory_name(uuid: &str) -> &str {
+    uuid.rsplit('.').next().unwrap_or("")
+}
+
 fn validate_destination(uuid: &str) -> Result<PathBuf> {
-    let default = uuid.split('.').nth(2).unwrap_or("").to_string();
+    let default = default_directory_name(uuid).to_string();
     let cwd = std::env::current_dir()?;
     let candidate = cwd.join(&default);
     if is_safe_base_name(&default) && !candidate.exists() {
@@ -205,4 +209,16 @@ fn try_open_editor(destination: &std::path::Path) -> Result<()> {
             .status();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_directory_uses_last_uuid_segment() {
+        assert_eq!(default_directory_name("com.elgato.counter"), "counter");
+        assert_eq!(default_directory_name("tv.twitch"), "twitch");
+        assert_eq!(default_directory_name("com.example.my.plugin"), "plugin");
+    }
 }

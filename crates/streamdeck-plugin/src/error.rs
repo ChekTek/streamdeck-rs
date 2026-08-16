@@ -39,7 +39,7 @@ pub enum Error {
         actual: u32,
     },
 
-    #[error("The action's manifestId cannot be undefined.")]
+    #[error("The action's UUID cannot be empty.")]
     MissingActionUuid,
 
     #[error("The action's manifestId was not found within the manifest: {0}")]

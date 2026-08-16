@@ -33,7 +33,7 @@ pub fn requires_version(
         return Err(Error::NotSupported {
             feature: feature.to_string(),
             required: required_s,
-            current: stream_deck_version.as_major_minor(),
+            current: min.as_major_minor(),
         });
     }
     Ok(())
@@ -56,10 +56,13 @@ pub fn requires_sdk_version(runtime: &Runtime, minimum: u32, feature: &str) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
     use crate::protocol::RegistrationInfo;
     use crate::registration::RegistrationParameters;
 
-    fn runtime_with_version(ver: &str) -> std::sync::Arc<Runtime> {
+    use std::sync::Arc;
+
+    fn runtime_with_version(ver: &str) -> Arc<Runtime> {
         let info = serde_json::from_str::<RegistrationInfo>(&format!(
             r#"{{"application":{{"version":"{ver}"}},"plugin":{{"uuid":"x","version":"1"}}}}"#
         ))
@@ -85,5 +88,22 @@ mod tests {
     fn accepts_current_version() {
         let rt = runtime_with_version("7.1");
         requires_version(6, 5, &rt.version, "deep-link", &rt).unwrap();
+    }
+
+    #[test]
+    fn reports_manifest_minimum_version_when_that_check_fails() {
+        let mut rt = runtime_with_version("7.1");
+        Arc::get_mut(&mut rt).unwrap().manifest =
+            Some(serde_json::from_str(r#"{"Software":{"MinimumVersion":"6.6"}}"#).unwrap());
+        let err = requires_version(7, 0, &rt.version, "onDeviceDidChange", &rt).unwrap_err();
+        match err {
+            Error::NotSupported {
+                required, current, ..
+            } => {
+                assert_eq!(required, "7.0");
+                assert_eq!(current, "6.6");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 }
