@@ -39,7 +39,7 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
     runtime
         .logger
         .create_scope("Connection")
-        .trace(redact_for_log(&register_json));
+        .trace_with(|| redact_for_log(&register_json));
     ws.send(Message::Text(register_json.into())).await?;
     runtime.logger.create_scope("Connection").info(format!(
         "connected, listening on {}",
@@ -119,10 +119,12 @@ fn handle_text(
     text: &str,
     dispatch_tx: &mpsc::UnboundedSender<PluginEvent>,
 ) {
-    let logged = redact_for_log(text);
-    runtime.logger.create_scope("Connection").trace(&logged);
     match serde_json::from_str::<PluginEvent>(text) {
         Ok(event) => {
+            runtime
+                .logger
+                .create_scope("Connection")
+                .trace_with(|| redact_for_log(text));
             let _ = runtime.events.send(Arc::new(event.clone()));
             if dispatch_tx.send(event).is_err() {
                 runtime
@@ -132,6 +134,7 @@ fn handle_text(
             }
         }
         Err(err) => {
+            let logged = redact_for_log(text);
             if let Ok(value) = serde_json::from_str::<Value>(text) {
                 if value.get("event").and_then(|e| e.as_str()).is_none() {
                     runtime

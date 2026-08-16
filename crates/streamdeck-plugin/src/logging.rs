@@ -100,8 +100,19 @@ impl Logger {
         }
     }
 
+    pub fn enabled(&self, level: LogLevel) -> bool {
+        level >= self.shared.level
+    }
+
     pub fn trace(&self, message: impl AsRef<str>) {
         self.log(LogLevel::Trace, message.as_ref());
+    }
+
+    /// Build a TRACE message only when that level will actually be emitted.
+    pub fn trace_with(&self, message: impl FnOnce() -> String) {
+        if self.enabled(LogLevel::Trace) {
+            self.log(LogLevel::Trace, &message());
+        }
     }
 
     pub fn debug(&self, message: impl AsRef<str>) {
@@ -291,10 +302,34 @@ pub(crate) fn redact_for_log(text: &str) -> String {
 mod tests {
     use super::*;
 
+    fn logger_with_level(level: LogLevel) -> Logger {
+        Logger {
+            name: String::new(),
+            shared: Arc::new(LoggerShared {
+                level,
+                console: false,
+                file: Mutex::new(None),
+            }),
+        }
+    }
+
     #[test]
     fn parses_levels() {
         assert_eq!(LogLevel::parse("debug"), Some(LogLevel::Debug));
         assert_eq!(LogLevel::parse("WARN"), Some(LogLevel::Warn));
+    }
+
+    #[test]
+    fn trace_with_skips_closure_when_disabled() {
+        let logger = logger_with_level(LogLevel::Info);
+        let called = std::sync::atomic::AtomicBool::new(false);
+        logger.trace_with(|| {
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            "expensive".into()
+        });
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!logger.enabled(LogLevel::Trace));
+        assert!(logger.enabled(LogLevel::Info));
     }
 
     #[test]

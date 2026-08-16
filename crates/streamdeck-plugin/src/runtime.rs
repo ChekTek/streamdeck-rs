@@ -205,7 +205,7 @@ impl Runtime {
         let json = serde_json::to_string(&command)?;
         self.logger
             .create_scope("Connection")
-            .trace(redact_for_log(&json));
+            .trace_with(|| redact_for_log(&json));
         self.outgoing_tx
             .send(json)
             .map_err(|_| Error::Disconnected)?;

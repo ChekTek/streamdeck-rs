@@ -106,12 +106,20 @@ where
 
 fn parse_info(value: &str) -> Result<RegistrationInfo> {
     let mut deserializer = serde_json::Deserializer::from_str(value);
-    serde_path_to_error::deserialize(&mut deserializer).map_err(|err| {
+    let info = serde_path_to_error::deserialize(&mut deserializer).map_err(|err| {
         Error::InvalidRegistrationInfo {
             path: err.path().to_string(),
             source: err.into_inner(),
         }
-    })
+    })?;
+    // `serde_json::from_str` also rejects trailing tokens after a valid value.
+    deserializer
+        .end()
+        .map_err(|source| Error::InvalidRegistrationInfo {
+            path: "$".into(),
+            source,
+        })?;
+    Ok(info)
 }
 
 #[cfg(test)]
@@ -212,5 +220,23 @@ mod tests {
             params.info.devices[0].device_type,
             crate::protocol::DeviceType::Unknown(-1)
         );
+    }
+
+    #[test]
+    fn rejects_trailing_tokens_after_registration_info() {
+        let info = format!("{} true", sample_info());
+        let err = RegistrationParameters::parse([
+            "-port",
+            "1",
+            "-pluginUUID",
+            "u",
+            "-registerEvent",
+            "registerPlugin",
+            "-info",
+            &info,
+        ])
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("trailing"), "{msg}");
     }
 }
