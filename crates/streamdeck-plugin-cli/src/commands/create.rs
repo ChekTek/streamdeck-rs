@@ -9,7 +9,7 @@ use crate::stream_deck::{
     crate_name_from, generate_plugin_id, get_plugins, is_safe_base_name, is_valid_plugin_id,
     require_supported_host,
 };
-use crate::template::{PluginInfo, render_template};
+use crate::template::{PluginInfo, render_template, sdk_dependency};
 
 use super::dev;
 use super::link;
@@ -17,6 +17,7 @@ use super::restart;
 
 pub fn run() -> Result<()> {
     require_supported_host()?;
+    sdk_dependency()?;
     println!(
         "Welcome to the {} creation wizard.",
         "Stream Deck Plugin".green()

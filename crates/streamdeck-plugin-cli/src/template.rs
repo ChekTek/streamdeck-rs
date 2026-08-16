@@ -19,13 +19,45 @@ pub struct PluginInfo {
     pub crate_name: String,
 }
 
-pub fn sdk_dependency() -> String {
-    if let Ok(path) = std::env::var("STREAMDECK_PLUGIN_PATH") {
-        let escaped = path.replace('\\', "/").replace('"', "\\\"");
-        format!("streamdeck-plugin = {{ path = \"{escaped}\" }}")
-    } else {
-        format!("streamdeck-plugin = \"{}\"", env!("CARGO_PKG_VERSION"))
+pub fn sdk_dependency() -> Result<String> {
+    sdk_dependency_with(
+        std::env::var("STREAMDECK_PLUGIN_PATH").ok(),
+        bundled_sdk_dir(),
+    )
+}
+
+fn bundled_sdk_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../streamdeck-plugin")
+}
+
+fn sdk_dependency_with(env_path: Option<String>, bundled: PathBuf) -> Result<String> {
+    if let Some(path) = env_path {
+        let path = PathBuf::from(path);
+        if !path.join("Cargo.toml").is_file() {
+            bail!(
+                "STREAMDECK_PLUGIN_PATH does not point to the streamdeck-plugin crate: {}",
+                path.display()
+            );
+        }
+        return Ok(path_dep(&path));
     }
+    if bundled.join("Cargo.toml").is_file() {
+        return Ok(path_dep(&bundled));
+    }
+    bail!(
+        "streamdeck-plugin SDK not found at {}. Set STREAMDECK_PLUGIN_PATH to this workspace's crates/streamdeck-plugin directory.",
+        bundled.display()
+    )
+}
+
+fn path_dep(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut rendered = canonical.to_string_lossy().into_owned();
+    if let Some(stripped) = rendered.strip_prefix(r"\\?\") {
+        rendered = stripped.to_string();
+    }
+    let escaped = rendered.replace('\\', "/").replace('"', "\\\"");
+    format!("streamdeck-plugin = {{ path = \"{escaped}\" }}")
 }
 
 pub fn render_template(destination: &Path, info: &PluginInfo) -> Result<()> {
@@ -35,7 +67,7 @@ pub fn render_template(destination: &Path, info: &PluginInfo) -> Result<()> {
     std::fs::create_dir_all(destination)
         .with_context(|| format!("create {}", destination.display()))?;
 
-    let vars = substitutions(info);
+    let vars = substitutions(info)?;
     let plugin_folder = format!("{}{PLUGIN_SUFFIX}", info.uuid);
 
     for name in Templates::iter() {
@@ -94,20 +126,20 @@ fn is_text_template(name: &str) -> bool {
         || name.ends_with("sdignore")
 }
 
-fn substitutions(info: &PluginInfo) -> HashMap<String, String> {
+fn substitutions(info: &PluginInfo) -> Result<HashMap<String, String>> {
     let mut vars = HashMap::new();
     vars.insert("author".into(), info.author.clone());
     vars.insert("name".into(), info.name.clone());
     vars.insert("uuid".into(), info.uuid.clone());
     vars.insert("description".into(), info.description.clone());
     vars.insert("crate_name".into(), info.crate_name.clone());
-    vars.insert("sdk_dep".into(), sdk_dependency());
+    vars.insert("sdk_dep".into(), sdk_dependency()?);
     vars.insert("author_json".into(), json_string(&info.author));
     vars.insert("name_json".into(), json_string(&info.name));
     vars.insert("description_json".into(), json_string(&info.description));
     vars.insert("uuid_json".into(), json_string(&info.uuid));
     vars.insert("os_json".into(), host_os_json());
-    vars
+    Ok(vars)
 }
 
 fn host_os_json() -> String {
@@ -171,7 +203,11 @@ mod tests {
 
         let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
         assert!(cargo.contains("name = \"hello-world\""));
-        assert!(cargo.contains("streamdeck-plugin"));
+        assert!(cargo.contains("streamdeck-plugin = { path ="));
+        assert!(!cargo.contains(&format!(
+            "streamdeck-plugin = \"{}\"",
+            env!("CARGO_PKG_VERSION")
+        )));
 
         let action =
             std::fs::read_to_string(dest.join("src/actions/increment_counter.rs")).unwrap();
@@ -205,5 +241,42 @@ mod tests {
             .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(manifest["Name"], r#"Say "hi""#);
+    }
+
+    #[test]
+    fn sdk_dependency_defaults_to_workspace_crate() {
+        let dep = sdk_dependency_with(None, bundled_sdk_dir()).unwrap();
+        assert!(dep.starts_with("streamdeck-plugin = { path ="));
+        assert!(dep.contains("streamdeck-plugin"));
+        assert!(!dep.contains(&format!("\"{}\"", env!("CARGO_PKG_VERSION"))));
+    }
+
+    #[test]
+    fn sdk_dependency_prefers_env_path() {
+        let bundled = bundled_sdk_dir();
+        let dep = sdk_dependency_with(
+            Some(bundled.to_string_lossy().into_owned()),
+            PathBuf::from("/nonexistent/streamdeck-plugin"),
+        )
+        .unwrap();
+        assert!(dep.starts_with("streamdeck-plugin = { path ="));
+    }
+
+    #[test]
+    fn sdk_dependency_errors_when_sdk_is_missing() {
+        let err =
+            sdk_dependency_with(None, PathBuf::from("/nonexistent/streamdeck-plugin")).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("STREAMDECK_PLUGIN_PATH"));
+        assert!(message.contains("/nonexistent/streamdeck-plugin"));
+    }
+
+    #[test]
+    fn sdk_dependency_errors_on_invalid_env_path() {
+        let err = sdk_dependency_with(Some("/nope".into()), bundled_sdk_dir()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("STREAMDECK_PLUGIN_PATH does not point")
+        );
     }
 }

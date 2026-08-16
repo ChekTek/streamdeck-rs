@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::actions::{Action, ActionContext, ActionHandle, DialAction, KeyAction};
@@ -59,12 +60,23 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
         }
     });
 
+    // Broadcast inbound events immediately so request/response APIs can complete
+    // while action callbacks run on a separate ordered worker.
+    let (dispatch_tx, mut dispatch_rx) = mpsc::unbounded_channel();
+    let worker_runtime = runtime.clone();
+    let worker = tokio::spawn(async move {
+        while let Some(event) = dispatch_rx.recv().await {
+            dispatch(&worker_runtime, event).await;
+        }
+    });
+
     let reader_runtime = runtime.clone();
     Ok(tokio::spawn(async move {
+        let mut read_result = Ok(());
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    handle_text(&reader_runtime, text.as_str()).await;
+                    handle_text(&reader_runtime, text.as_str(), &dispatch_tx);
                 }
                 Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Binary(_)) => {}
                 Ok(Message::Close(_)) | Ok(Message::Frame(_)) => break,
@@ -73,21 +85,36 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
                         .logger
                         .create_scope("Connection")
                         .error(format!("WebSocket error: {err}"));
-                    return Err(err.into());
+                    read_result = Err(err.into());
+                    break;
                 }
             }
         }
-        Ok(())
+        drop(dispatch_tx);
+        match worker.await {
+            Ok(()) => read_result,
+            Err(err) if read_result.is_ok() => Err(Error::Message(format!("dispatch task: {err}"))),
+            Err(_) => read_result,
+        }
     }))
 }
 
-async fn handle_text(runtime: &Arc<Runtime>, text: &str) {
+fn handle_text(
+    runtime: &Arc<Runtime>,
+    text: &str,
+    dispatch_tx: &mpsc::UnboundedSender<PluginEvent>,
+) {
     let logged = redact_inbound(text);
     runtime.logger.create_scope("Connection").trace(&logged);
     match serde_json::from_str::<PluginEvent>(text) {
         Ok(event) => {
             let _ = runtime.events.send(Arc::new(event.clone()));
-            dispatch(runtime, event).await;
+            if dispatch_tx.send(event).is_err() {
+                runtime
+                    .logger
+                    .create_scope("Connection")
+                    .warn("dispatch worker stopped");
+            }
         }
         Err(err) => {
             if let Ok(value) = serde_json::from_str::<Value>(text) {
@@ -636,6 +663,26 @@ mod tests {
         }
     }
 
+    struct FetchSettingsAction;
+
+    impl SingletonAction for FetchSettingsAction {
+        const UUID: &'static str = "com.elgato.test.one";
+        type Settings = Value;
+
+        async fn on_key_down(&self, ev: KeyDownEvent<Self::Settings>) {
+            let settings = ev
+                .action
+                .get_settings::<Value>()
+                .await
+                .expect("settings response");
+            let title = settings
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("missing");
+            let _ = ev.action.set_title(title).await;
+        }
+    }
+
     fn info_json() -> String {
         json!({
             "application": { "version": "7.1.0", "language": "en", "platform": "mac", "platformVersion": "14", "font": "Arial" },
@@ -730,6 +777,116 @@ mod tests {
         assert_eq!(cmd["event"], "setTitle");
         assert_eq!(cmd["context"], "context123");
         assert_eq!(cmd["payload"]["title"], "Hello world");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
+    }
+
+    #[tokio::test]
+    async fn get_settings_from_callback_does_not_deadlock() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let info = info_json();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let first = ws.next().await.unwrap().unwrap();
+            let Message::Text(_) = first else {
+                panic!("expected text")
+            };
+
+            let will_appear = json!({
+                "event": "willAppear",
+                "action": "com.elgato.test.one",
+                "context": "context123",
+                "device": "device123",
+                "payload": {
+                    "controller": "Keypad",
+                    "coordinates": { "column": 1, "row": 2 },
+                    "isInMultiAction": false,
+                    "resources": {},
+                    "settings": {}
+                }
+            });
+            ws.send(Message::Text(will_appear.to_string().into()))
+                .await
+                .unwrap();
+
+            let key_down = json!({
+                "event": "keyDown",
+                "action": "com.elgato.test.one",
+                "context": "context123",
+                "device": "device123",
+                "payload": {
+                    "controller": "Keypad",
+                    "coordinates": { "column": 1, "row": 2 },
+                    "isInMultiAction": false,
+                    "resources": {},
+                    "settings": {}
+                }
+            });
+            ws.send(Message::Text(key_down.to_string().into()))
+                .await
+                .unwrap();
+
+            loop {
+                let msg = ws.next().await.unwrap().unwrap();
+                let Message::Text(text) = msg else {
+                    panic!("expected text")
+                };
+                let cmd: Value = serde_json::from_str(text.as_str()).unwrap();
+                match cmd["event"].as_str() {
+                    Some("getSettings") => {
+                        let reply = json!({
+                            "event": "didReceiveSettings",
+                            "action": "com.elgato.test.one",
+                            "context": "context123",
+                            "device": "device123",
+                            "id": cmd.get("id").cloned(),
+                            "payload": {
+                                "controller": "Keypad",
+                                "coordinates": { "column": 1, "row": 2 },
+                                "isInMultiAction": false,
+                                "resources": {},
+                                "settings": { "label": "from-sd" }
+                            }
+                        });
+                        ws.send(Message::Text(reply.to_string().into()))
+                            .await
+                            .unwrap();
+                    }
+                    Some("setTitle") => {
+                        let _ = ws.close(None).await;
+                        break cmd;
+                    }
+                    other => panic!("unexpected event {other:?}"),
+                }
+            }
+        });
+
+        let plugin = tokio::spawn(async move {
+            StreamDeck::from_args([
+                "-port",
+                &port.to_string(),
+                "-pluginUUID",
+                "abc123",
+                "-registerEvent",
+                "registerPlugin",
+                "-info",
+                &info,
+            ])
+            .unwrap()
+            .register_action(FetchSettingsAction)
+            .unwrap()
+            .connect()
+            .await
+        });
+
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server timed out")
+            .unwrap();
+        assert_eq!(cmd["event"], "setTitle");
+        assert_eq!(cmd["payload"]["title"], "from-sd");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
     }
 

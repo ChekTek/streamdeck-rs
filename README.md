@@ -13,12 +13,14 @@ The CLI binary is `streamdeck-plugin`, not `streamdeck`. Elgato’s Node CLI (`@
 
 ## Quick start
 
-Point the scaffold at this checkout, then run the CLI from the workspace:
+Point the scaffold at this checkout if the CLI was built from a different tree, then run it from the workspace:
 
 ```bash
 export STREAMDECK_PLUGIN_PATH=$PWD/crates/streamdeck-plugin
 cargo run -p streamdeck-plugin-cli -- create
 ```
+
+When you run the CLI from this workspace, the SDK path is resolved automatically. `STREAMDECK_PLUGIN_PATH` overrides that default.
 
 The wizard scaffolds a native `.sdPlugin` (manifest, icons, increment-counter action, property inspector), builds the Rust binary, symlinks it into Stream Deck’s plugins folder, and restarts the plugin.
 

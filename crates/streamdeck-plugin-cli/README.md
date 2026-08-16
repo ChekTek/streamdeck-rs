@@ -5,9 +5,10 @@ CLI for creating and managing **native** Stream Deck plugins written in Rust.
 This crate is not published to crates.io. From the workspace root:
 
 ```bash
-export STREAMDECK_PLUGIN_PATH=$PWD/crates/streamdeck-plugin
 cargo run -p streamdeck-plugin-cli -- create
 ```
+
+The CLI writes a path dependency on this workspace’s `crates/streamdeck-plugin`. Override that with `STREAMDECK_PLUGIN_PATH` if the CLI binary was built from a different checkout.
 
 The executable is `streamdeck-plugin`. It does not replace Elgato’s Node CLI (`streamdeck` / `sd` from `@elgato/cli`).
 
@@ -53,8 +54,6 @@ Override the plugins directory with `STREAMDECK_PLUGINS_DIR` (useful in tests).
 ```
 
 The sample action UUID is `<plugin-uuid>.increment`. The manifest uses `CodePathMac` / `CodePathWin` (no `Nodejs` block), `SDKVersion` 3, and `Software.MinimumVersion` `7.1`. `OS` lists only the host platform used during `create`; add the other platform and its binary before packing a dual-OS plugin.
-
-Set `STREAMDECK_PLUGIN_PATH` to this repo’s `crates/streamdeck-plugin` so the generated `Cargo.toml` uses a path dependency. Without it, the scaffold pins `streamdeck-plugin` by version and `cargo build` cannot fetch it.
 
 After create, if `cursor` or `code` is on `PATH`, the wizard offers to open the project.
 

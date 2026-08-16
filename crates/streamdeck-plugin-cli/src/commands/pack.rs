@@ -49,18 +49,7 @@ pub fn run(
     }
 
     let output_dir = output.unwrap_or_else(|| std::env::current_dir().expect("cwd"));
-    std::fs::create_dir_all(&output_dir)?;
     let output_path = output_dir.join(format!("{uuid}.streamDeckPlugin"));
-    if output_path.exists() {
-        if force {
-            std::fs::remove_file(&output_path)?;
-        } else {
-            version_guard.restore();
-            bail!(
-                "File already exists\nSpecify a different -o|--output location, or -f|--force to overwrite"
-            );
-        }
-    }
 
     let files = collect_files(&plugin_dir)?;
     let manifest: Value =
@@ -116,6 +105,18 @@ pub fn run(
         println!("No package created, --dry-run flag is present");
         println!("{}", output_path.display().to_string().dimmed());
         return Ok(());
+    }
+
+    std::fs::create_dir_all(&output_dir)?;
+    if output_path.exists() {
+        if force {
+            std::fs::remove_file(&output_path)?;
+        } else {
+            version_guard.restore();
+            bail!(
+                "File already exists\nSpecify a different -o|--output location, or -f|--force to overwrite"
+            );
+        }
     }
 
     write_zip(&plugin_dir, &files, &output_path)?;
@@ -354,6 +355,59 @@ mod tests {
             .by_name("com.example.pack.sdPlugin/manifest.json")
             .unwrap();
         assert_eq!(manifest.unix_mode().unwrap() & 0o777, 0o644);
+    }
+
+    fn minimal_plugin(root: &Path, uuid: &str) -> PathBuf {
+        let plugin = root.join(format!("{uuid}.sdPlugin"));
+        std::fs::create_dir_all(plugin.join("bin")).unwrap();
+        std::fs::write(
+            plugin.join("manifest.json"),
+            format!(r#"{{"Name":"Pack","UUID":"{uuid}","Version":"0.1.0.0"}}"#),
+        )
+        .unwrap();
+        std::fs::write(plugin.join("bin/plugin"), b"binary").unwrap();
+        plugin
+    }
+
+    #[test]
+    fn dry_run_does_not_write_or_delete_package() {
+        let dir = tempdir().unwrap();
+        let plugin = minimal_plugin(dir.path(), "com.example.dry");
+        let out = dir.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let zip_path = out.join("com.example.dry.streamDeckPlugin");
+        std::fs::write(&zip_path, b"keep-me").unwrap();
+
+        run(
+            Some(plugin.clone()),
+            true,
+            true,
+            Some(out.clone()),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&zip_path).unwrap(), b"keep-me");
+
+        run(Some(plugin), true, false, Some(out.clone()), None, true).unwrap();
+        assert_eq!(std::fs::read(&zip_path).unwrap(), b"keep-me");
+
+        let missing_out = dir.path().join("missing");
+        run(
+            Some(minimal_plugin(dir.path(), "com.example.dry2")),
+            true,
+            false,
+            Some(missing_out.clone()),
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(!missing_out.exists());
+        assert!(
+            !missing_out
+                .join("com.example.dry2.streamDeckPlugin")
+                .exists()
+        );
     }
 
     #[cfg(unix)]

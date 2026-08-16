@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use colored::Colorize;
 
 pub fn run(disable: bool) -> Result<()> {
@@ -11,6 +11,8 @@ pub fn run(disable: bool) -> Result<()> {
 pub fn set_developer_mode(disable: bool) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        use anyhow::{Context, bail};
+
         let value = if disable { "NO" } else { "YES" };
         let status = std::process::Command::new("defaults")
             .args([
@@ -34,12 +36,13 @@ pub fn set_developer_mode(disable: bool) -> Result<()> {
     #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = disable;
-        bail!("developer mode is only supported on macOS and Windows");
+        anyhow::bail!("developer mode is only supported on macOS and Windows")
     }
 }
 
 #[cfg(windows)]
 fn set_developer_mode_windows(disable: bool) -> Result<()> {
+    use anyhow::Context;
     use winreg::RegKey;
     use winreg::enums::*;
 

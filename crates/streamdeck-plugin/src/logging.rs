@@ -47,7 +47,7 @@ struct LoggerShared {
 
 struct FileTarget {
     path: PathBuf,
-    file: File,
+    file: Option<File>,
 }
 
 /// Logger matching the TypeScript SDK: file under `cwd/logs/{pluginUUID}.log`,
@@ -147,35 +147,62 @@ impl FileTarget {
         fs::create_dir_all(dir)?;
         let path = dir.join(format!("{plugin_uuid}.log"));
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        Ok(Self { path, file })
+        Ok(Self {
+            path,
+            file: Some(file),
+        })
     }
 
     fn write(&mut self, line: &str) -> std::io::Result<()> {
-        if let Ok(meta) = self.file.metadata()
-            && meta.len() > MAX_SIZE
-        {
+        let should_rotate = self
+            .ensure_open()?
+            .metadata()
+            .map(|meta| meta.len() > MAX_SIZE)
+            .unwrap_or(false);
+        if should_rotate {
             self.rotate()?;
         }
-        self.file.write_all(line.as_bytes())?;
+        self.ensure_open()?.write_all(line.as_bytes())?;
         Ok(())
     }
 
     fn rotate(&mut self) -> std::io::Result<()> {
-        let _ = self.file.flush();
+        if let Some(mut file) = self.file.take() {
+            file.flush()?;
+            drop(file);
+        }
+        let oldest = self.rotated_path(MAX_FILE_COUNT);
+        if oldest.exists() {
+            fs::remove_file(&oldest)?;
+        }
         for i in (1..MAX_FILE_COUNT).rev() {
             let from = self.rotated_path(i);
-            let to = self.rotated_path(i + 1);
             if from.exists() {
-                let _ = fs::rename(&from, &to);
+                fs::rename(&from, self.rotated_path(i + 1))?;
             }
         }
-        let first = self.rotated_path(1);
-        let _ = fs::rename(&self.path, &first);
-        self.file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
+        if self.path.exists() {
+            fs::rename(&self.path, self.rotated_path(1))?;
+        }
+        self.file = Some(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)?,
+        );
         Ok(())
+    }
+
+    fn ensure_open(&mut self) -> std::io::Result<&mut File> {
+        if self.file.is_none() {
+            self.file = Some(
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.path)?,
+            );
+        }
+        Ok(self.file.as_mut().expect("log file"))
     }
 
     fn rotated_path(&self, n: usize) -> PathBuf {
@@ -211,5 +238,47 @@ mod tests {
     fn parses_levels() {
         assert_eq!(LogLevel::parse("debug"), Some(LogLevel::Debug));
         assert_eq!(LogLevel::parse("WARN"), Some(LogLevel::Warn));
+    }
+
+    #[test]
+    fn rotate_removes_oldest_backup_and_shifts_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "sd-log-rotate-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("plugin.log");
+        fs::write(&path, b"current").unwrap();
+        for i in 1..=MAX_FILE_COUNT {
+            fs::write(path.with_extension(format!("log.{i}")), format!("old-{i}")).unwrap();
+        }
+
+        let file = OpenOptions::new().append(true).open(&path).unwrap();
+        let mut target = FileTarget {
+            path: path.clone(),
+            file: Some(file),
+        };
+        target.rotate().unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dir.join("plugin.log.1")).unwrap(),
+            "current"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("plugin.log.2")).unwrap(),
+            "old-1"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("plugin.log.10")).unwrap(),
+            "old-9"
+        );
+        assert!(path.is_file());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
