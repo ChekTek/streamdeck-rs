@@ -319,4 +319,31 @@ mod tests {
         let ev: PluginEvent = serde_json::from_str(r#"{"event":"systemDidWakeUp"}"#).unwrap();
         assert!(matches!(ev, PluginEvent::SystemDidWakeUp));
     }
+
+    #[test]
+    fn will_appear_keeps_unknown_controller() {
+        let json = r#"{
+            "event": "willAppear",
+            "action": "com.elgato.test.one",
+            "context": "context123",
+            "device": "device123",
+            "payload": {
+                "controller": "Touchscreen",
+                "coordinates": { "column": 0, "row": 0 },
+                "isInMultiAction": false,
+                "resources": {},
+                "settings": {}
+            }
+        }"#;
+        let ev: PluginEvent = serde_json::from_str(json).unwrap();
+        match ev {
+            PluginEvent::WillAppear(m) => {
+                assert_eq!(
+                    m.payload.controller,
+                    Controller::Unknown("Touchscreen".into())
+                );
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
 }

@@ -37,8 +37,8 @@ impl Action {
 
     pub fn controller(&self) -> Controller {
         match self {
-            Self::Key(a) => a.handle.controller,
-            Self::Dial(a) => a.handle.controller,
+            Self::Key(a) => a.handle.controller.clone(),
+            Self::Dial(a) => a.handle.controller.clone(),
         }
     }
 

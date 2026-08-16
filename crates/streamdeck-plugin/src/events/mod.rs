@@ -18,7 +18,7 @@ impl AppearPayloadTyped<Value> {
     pub fn from_protocol(p: &AppearPayload) -> Self {
         Self {
             settings: p.settings.clone(),
-            controller: p.controller,
+            controller: p.controller.clone(),
             coordinates: p.coordinates,
             is_in_multi_action: p.is_in_multi_action,
             resources: p.resources.clone(),

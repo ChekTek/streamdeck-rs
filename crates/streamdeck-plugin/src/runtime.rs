@@ -11,7 +11,7 @@ use crate::devices::DeviceStore;
 use crate::error::{Error, Result};
 use crate::events::*;
 use crate::listeners::ListenerSet;
-use crate::logging::{Logger, plugin_uuid_from_cwd};
+use crate::logging::{Logger, log_file_stem, redact_for_log};
 use crate::manifest::Manifest;
 use crate::protocol::{PluginCommand, PluginEvent};
 use crate::registration::RegistrationParameters;
@@ -154,21 +154,20 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(registration: RegistrationParameters) -> Arc<Self> {
+        let uuid = log_file_stem(
+            Some(registration.plugin_uuid.as_str()),
+            Some(registration.info.plugin.uuid.as_str()),
+        );
+        Self::with_logger(registration, Logger::new(&uuid))
+    }
+
+    pub fn with_logger(registration: RegistrationParameters, logger: Logger) -> Arc<Self> {
         let version = Version::parse(&registration.info.application.version).unwrap_or(Version {
             major: 0,
             minor: 0,
             patch: 0,
             build: 0,
         });
-        let uuid = {
-            let from_cwd = plugin_uuid_from_cwd();
-            if from_cwd == "plugin" && !registration.info.plugin.uuid.is_empty() {
-                registration.info.plugin.uuid.clone()
-            } else {
-                from_cwd
-            }
-        };
-        let logger = Logger::new(&uuid);
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
         let (events, _) = broadcast::channel(1024);
         let manifest = Manifest::load().ok();
@@ -204,7 +203,9 @@ impl Runtime {
 
     pub async fn send(&self, command: PluginCommand) -> Result<()> {
         let json = serde_json::to_string(&command)?;
-        self.logger.create_scope("Connection").trace(&json);
+        self.logger
+            .create_scope("Connection")
+            .trace(redact_for_log(&json));
         self.outgoing_tx
             .send(json)
             .map_err(|_| Error::Disconnected)?;

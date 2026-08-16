@@ -1,16 +1,53 @@
 use serde::{Deserialize, Serialize};
-use serde_repr::{Deserialize_repr, Serialize_repr};
 
 /// Sub-type used to determine the type of bar to render.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr)]
-#[repr(u8)]
+///
+/// Unknown integers are preserved so a new layout bar cannot fail deserialization.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum BarSubType {
-    Rectangle = 0,
-    DoubleRectangle = 1,
-    Trapezoid = 2,
-    DoubleTrapezoid = 3,
+    Rectangle,
+    DoubleRectangle,
+    Trapezoid,
+    DoubleTrapezoid,
     #[default]
-    Groove = 4,
+    Groove,
+    Unknown(i32),
+}
+
+impl BarSubType {
+    pub fn from_i32(value: i32) -> Self {
+        match value {
+            0 => Self::Rectangle,
+            1 => Self::DoubleRectangle,
+            2 => Self::Trapezoid,
+            3 => Self::DoubleTrapezoid,
+            4 => Self::Groove,
+            other => Self::Unknown(other),
+        }
+    }
+
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Self::Rectangle => 0,
+            Self::DoubleRectangle => 1,
+            Self::Trapezoid => 2,
+            Self::DoubleTrapezoid => 3,
+            Self::Groove => 4,
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
+impl Serialize for BarSubType {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i32(self.as_i32())
+    }
+}
+
+impl<'de> Deserialize<'de> for BarSubType {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        i32::deserialize(deserializer).map(Self::from_i32)
+    }
 }
 
 /// Payload object used to update a Stream Deck encoder layout.
@@ -75,4 +112,19 @@ pub struct Text {
     pub opacity: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn bar_subtype_keeps_unknown_integers() {
+        assert_eq!(
+            serde_json::from_value::<BarSubType>(json!(9)).unwrap(),
+            BarSubType::Unknown(9)
+        );
+        assert_eq!(serde_json::to_value(BarSubType::Groove).unwrap(), json!(4));
+    }
 }

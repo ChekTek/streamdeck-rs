@@ -242,7 +242,9 @@ fn icon_exists(plugin_dir: &Path, rel: &str) -> Result<bool, ()> {
     let candidates = [
         plugin_dir.join(rel),
         plugin_dir.join(rel).with_extension("png"),
+        plugin_dir.join(rel).with_extension("svg"),
         plugin_dir.join(format!("{rel}.png")),
+        plugin_dir.join(format!("{rel}.svg")),
         plugin_dir.join(format!("{rel}@2x.png")),
     ];
     Ok(candidates
@@ -351,6 +353,40 @@ mod tests {
             errors
                 .iter()
                 .any(|e| e.contains("missing plugin binary for windows"))
+        );
+    }
+
+    #[test]
+    fn accepts_svg_icons() {
+        let dir = tempdir().unwrap();
+        let plugin = dir.path().join("com.example.svg.sdPlugin");
+        write_plugin(
+            &plugin,
+            r#"{
+                "UUID": "com.example.svg",
+                "Version": "0.1.0.0",
+                "Icon": "imgs/plugin/marketplace",
+                "CodePathMac": "bin/plugin",
+                "CodePathWin": "bin/plugin.exe",
+                "Actions": [{
+                    "UUID": "com.example.svg.one",
+                    "Icon": "imgs/actions/icon",
+                    "States": [{ "Image": "imgs/actions/key" }]
+                }]
+            }"#,
+        );
+        std::fs::create_dir_all(plugin.join("imgs/plugin")).unwrap();
+        std::fs::create_dir_all(plugin.join("imgs/actions")).unwrap();
+        std::fs::create_dir_all(plugin.join("bin")).unwrap();
+        std::fs::write(plugin.join("imgs/plugin/marketplace.svg"), b"<svg/>").unwrap();
+        std::fs::write(plugin.join("imgs/actions/icon.svg"), b"<svg/>").unwrap();
+        std::fs::write(plugin.join("imgs/actions/key.svg"), b"<svg/>").unwrap();
+        let errors = validate_plugin(&plugin).unwrap();
+        assert!(
+            !errors.iter().any(|e| e.contains("missing Icon")
+                || e.contains("missing action Icon")
+                || e.contains("missing state Image")),
+            "expected SVG icons to validate, got {errors:?}"
         );
     }
 }

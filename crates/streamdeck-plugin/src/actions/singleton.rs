@@ -14,6 +14,11 @@ use super::Action;
 /// Per-UUID action handler. Optional methods default to no-ops.
 ///
 /// One instance receives events for every visible instance of that action UUID.
+///
+/// Panics in these callbacks are caught, logged, and do not stop the plugin.
+/// Heavy CPU work (image rasterization, font shaping) should run on
+/// [`tokio::task::spawn_blocking`] rather than on the Tokio worker that
+/// drives `willAppear` / `keyDown`.
 pub trait SingletonAction: Send + Sync + 'static {
     /// Manifest action UUID (`Actions[].UUID`).
     const UUID: &'static str;

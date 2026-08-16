@@ -27,10 +27,11 @@ impl SingletonAction for IncrementCounter {
     }
 }
 
-#[tokio::main]
-async fn main() -> streamdeck::Result<()> {
-    StreamDeck::new()?
-        .register_action(IncrementCounter)?
-        .connect()
-        .await
+fn main() -> streamdeck::Result<()> {
+    streamdeck::block_on(async {
+        StreamDeck::new()?
+            .register_action(IncrementCounter)?
+            .connect()
+            .await
+    })
 }

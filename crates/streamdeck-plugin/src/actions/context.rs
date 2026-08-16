@@ -12,6 +12,6 @@ pub struct ActionContext {
 
 impl ActionContext {
     pub fn controller_type(&self) -> Controller {
-        self.controller
+        self.controller.clone()
     }
 }
