@@ -46,6 +46,10 @@ use std::sync::Arc;
 
 use crate::runtime::{Runtime, set_runtime, try_runtime};
 
+/// Default Tokio worker stack size. Rasterizing key images (for example with
+/// `resvg`) on a worker can overflow the 2 MiB default and SIGSEGV.
+pub const PLUGIN_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
+
 /// Plugin facade, equivalent to the TypeScript `streamDeck` object.
 #[derive(Clone)]
 pub struct StreamDeck {
@@ -59,13 +63,25 @@ impl StreamDeck {
     }
 
     /// Parse registration arguments from an iterator of flags.
+    ///
+    /// Opens `logs/{pluginUUID}.log` before parsing `-info` so registration failures
+    /// are written to the plugin log instead of looking like a silent crash.
     pub fn from_args<I, S>(args: I) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let registration = RegistrationParameters::parse(args)?;
-        let runtime = Runtime::new(registration);
+        let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
+        let plugin_uuid = crate::registration::flag_value(&args, "-pluginUUID");
+        let logger = Logger::new(&crate::logging::log_file_stem(plugin_uuid.as_deref(), None));
+        let registration = match RegistrationParameters::parse(args) {
+            Ok(registration) => registration,
+            Err(err) => {
+                logger.error(err.to_string());
+                return Err(err);
+            }
+        };
+        let runtime = Runtime::with_logger(registration, logger);
         set_runtime(runtime.clone());
         Ok(Self { runtime })
     }
@@ -188,4 +204,22 @@ pub fn info() -> Result<Info> {
 /// Process-wide i18n provider.
 pub fn i18n() -> Result<I18n> {
     Ok(I18n::from(try_runtime()?.as_ref()))
+}
+
+/// Run a plugin future on a multi-thread Tokio runtime with an 8 MiB worker stack.
+///
+/// Prefer [`tokio::task::spawn_blocking`] for heavy CPU work inside action handlers
+/// (`resvg`, font shaping, image encode). This helper is a safety net for the
+/// process so those stacks are less likely to overflow.
+pub fn block_on<T, E>(
+    fut: impl Future<Output = std::result::Result<T, E>>,
+) -> std::result::Result<T, E>
+where
+    E: From<std::io::Error>,
+{
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(PLUGIN_THREAD_STACK_SIZE)
+        .build()?
+        .block_on(fut)
 }

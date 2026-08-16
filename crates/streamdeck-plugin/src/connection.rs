@@ -1,6 +1,7 @@
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -9,6 +10,7 @@ use crate::actions::{Action, ActionContext, ActionHandle, DialAction, KeyAction}
 use crate::devices::Device;
 use crate::error::{Error, Result};
 use crate::events::*;
+use crate::logging::redact_for_log;
 use crate::protocol::{
     ActionMessage, AppearPayload, Controller, EncoderPayload, KeyGesturePayload, PluginEvent,
     RegisterEvent,
@@ -37,8 +39,12 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
     runtime
         .logger
         .create_scope("Connection")
-        .trace(&register_json);
+        .trace_with(|| redact_for_log(&register_json));
     ws.send(Message::Text(register_json.into())).await?;
+    runtime.logger.create_scope("Connection").info(format!(
+        "connected, listening on {}",
+        runtime.registration.websocket_url()
+    ));
 
     runtime.seed_devices();
 
@@ -62,11 +68,20 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
 
     // Broadcast inbound events immediately so request/response APIs can complete
     // while action callbacks run on a separate ordered worker.
-    let (dispatch_tx, mut dispatch_rx) = mpsc::unbounded_channel();
+    let (dispatch_tx, mut dispatch_rx) = mpsc::unbounded_channel::<PluginEvent>();
     let worker_runtime = runtime.clone();
     let worker = tokio::spawn(async move {
         while let Some(event) = dispatch_rx.recv().await {
-            dispatch(&worker_runtime, event).await;
+            let event_name = event.name();
+            if let Err(payload) = AssertUnwindSafe(dispatch(&worker_runtime, event))
+                .catch_unwind()
+                .await
+            {
+                worker_runtime.logger.error(format!(
+                    "action handler panicked during {event_name}: {}",
+                    panic_message(&payload)
+                ));
+            }
         }
     });
 
@@ -104,10 +119,12 @@ fn handle_text(
     text: &str,
     dispatch_tx: &mpsc::UnboundedSender<PluginEvent>,
 ) {
-    let logged = redact_inbound(text);
-    runtime.logger.create_scope("Connection").trace(&logged);
     match serde_json::from_str::<PluginEvent>(text) {
         Ok(event) => {
+            runtime
+                .logger
+                .create_scope("Connection")
+                .trace_with(|| redact_for_log(text));
             let _ = runtime.events.send(Arc::new(event.clone()));
             if dispatch_tx.send(event).is_err() {
                 runtime
@@ -117,6 +134,7 @@ fn handle_text(
             }
         }
         Err(err) => {
+            let logged = redact_for_log(text);
             if let Ok(value) = serde_json::from_str::<Value>(text) {
                 if value.get("event").and_then(|e| e.as_str()).is_none() {
                     runtime
@@ -139,20 +157,13 @@ fn handle_text(
     }
 }
 
-fn redact_inbound(text: &str) -> String {
-    match serde_json::from_str::<Value>(text) {
-        Ok(mut value) => {
-            if value.get("event").and_then(Value::as_str) == Some("didReceiveSecrets") {
-                if let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut) {
-                    payload.insert("secrets".into(), Value::String("[redacted]".into()));
-                }
-                value.to_string()
-            } else {
-                text.to_string()
-            }
-        }
-        Err(_) if text.contains("didReceiveSecrets") => "[redacted didReceiveSecrets]".into(),
-        Err(_) => text.to_string(),
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Box<dyn Any>".into()
     }
 }
 
@@ -297,9 +308,9 @@ fn action_from_appear(
         &msg.action,
         &msg.context,
         &msg.device,
-        msg.payload.controller,
+        msg.payload.controller.clone(),
     )?;
-    match msg.payload.controller {
+    match &msg.payload.controller {
         Controller::Keypad => {
             let coords = if msg.payload.is_in_multi_action {
                 None
@@ -319,16 +330,22 @@ fn action_from_appear(
                 .ok_or_else(|| Error::Message("encoder willAppear missing coordinates".into()))?;
             Ok(Action::Dial(DialAction::new(handle, coords)))
         }
+        Controller::Unknown(name) => Err(Error::Message(format!(
+            "unknown controller `{name}` for action {}",
+            msg.action
+        ))),
     }
 }
 
 async fn on_will_appear(runtime: &Arc<Runtime>, msg: ActionMessage<AppearPayload>) {
-    let Ok(action) = action_from_appear(runtime, &msg) else {
-        runtime.logger.error(format!(
-            "Failed to initialize action; device {} not found",
-            msg.device
-        ));
-        return;
+    let action = match action_from_appear(runtime, &msg) {
+        Ok(action) => action,
+        Err(err) => {
+            runtime
+                .logger
+                .error(format!("Failed to initialize action: {err}"));
+            return;
+        }
     };
     if runtime.experimental_ids() {
         runtime
@@ -363,7 +380,7 @@ async fn on_will_disappear(runtime: &Arc<Runtime>, msg: ActionMessage<AppearPayl
         id: msg.context.clone(),
         manifest_id: msg.action.clone(),
         device,
-        controller: msg.payload.controller,
+        controller: msg.payload.controller.clone(),
     };
     runtime.action_store.delete(&msg.context);
     runtime
@@ -389,7 +406,7 @@ async fn on_key(runtime: &Arc<Runtime>, msg: ActionMessage<KeyGesturePayload>, d
         action: key,
         payload: KeyPayloadTyped {
             settings: msg.payload.settings,
-            controller: msg.payload.controller,
+            controller: msg.payload.controller.clone(),
             coordinates: msg.payload.coordinates,
             is_in_multi_action: msg.payload.is_in_multi_action,
             resources: msg.payload.resources,
@@ -496,7 +513,7 @@ async fn on_title(
         action,
         payload: TitlePayloadTyped {
             settings: msg.payload.settings,
-            controller: msg.payload.controller,
+            controller: msg.payload.controller.clone(),
             coordinates: msg.payload.coordinates,
             resources: msg.payload.resources,
             state: msg.payload.state,
@@ -907,12 +924,105 @@ mod tests {
         assert!(v["payload"].get("state").is_none());
     }
 
-    #[test]
-    fn redacts_secrets_payloads() {
-        let raw = r#"{"event":"didReceiveSecrets","payload":{"secrets":{"token":"s3cret"}}}"#;
-        let redacted = redact_inbound(raw);
-        assert!(!redacted.contains("s3cret"));
-        assert!(redacted.contains("didReceiveSecrets"));
-        assert!(redacted.contains("[redacted]"));
+    struct PanicThenTitleAction;
+
+    impl SingletonAction for PanicThenTitleAction {
+        const UUID: &'static str = "com.elgato.test.one";
+        type Settings = Value;
+
+        async fn on_key_down(&self, ev: KeyDownEvent<Self::Settings>) {
+            static SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !SEEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                panic!("boom");
+            }
+            let _ = ev.action.set_title("survived").await;
+        }
+    }
+
+    #[tokio::test]
+    async fn handler_panic_does_not_stop_dispatch() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let info = info_json();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let first = ws.next().await.unwrap().unwrap();
+            let Message::Text(_) = first else {
+                panic!("expected text")
+            };
+
+            let will_appear = json!({
+                "event": "willAppear",
+                "action": "com.elgato.test.one",
+                "context": "context123",
+                "device": "device123",
+                "payload": {
+                    "controller": "Keypad",
+                    "coordinates": { "column": 1, "row": 2 },
+                    "isInMultiAction": false,
+                    "resources": {},
+                    "settings": {}
+                }
+            });
+            ws.send(Message::Text(will_appear.to_string().into()))
+                .await
+                .unwrap();
+
+            let key_down = json!({
+                "event": "keyDown",
+                "action": "com.elgato.test.one",
+                "context": "context123",
+                "device": "device123",
+                "payload": {
+                    "controller": "Keypad",
+                    "coordinates": { "column": 1, "row": 2 },
+                    "isInMultiAction": false,
+                    "resources": {},
+                    "settings": {}
+                }
+            });
+            ws.send(Message::Text(key_down.to_string().into()))
+                .await
+                .unwrap();
+            ws.send(Message::Text(key_down.to_string().into()))
+                .await
+                .unwrap();
+
+            let reply = ws.next().await.unwrap().unwrap();
+            let Message::Text(text) = reply else {
+                panic!("expected text")
+            };
+            let cmd: Value = serde_json::from_str(text.as_str()).unwrap();
+            let _ = ws.close(None).await;
+            cmd
+        });
+
+        let plugin = tokio::spawn(async move {
+            StreamDeck::from_args([
+                "-port",
+                &port.to_string(),
+                "-pluginUUID",
+                "abc123",
+                "-registerEvent",
+                "registerPlugin",
+                "-info",
+                &info,
+            ])
+            .unwrap()
+            .register_action(PanicThenTitleAction)
+            .unwrap()
+            .connect()
+            .await
+        });
+
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server timed out")
+            .unwrap();
+        assert_eq!(cmd["event"], "setTitle");
+        assert_eq!(cmd["payload"]["title"], "survived");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
     }
 }

@@ -40,12 +40,13 @@ impl SingletonAction for SayHelloAction {
     }
 }
 
-#[tokio::main]
-async fn main() -> streamdeck::Result<()> {
-    StreamDeck::new()?
-        .register_action(SayHelloAction)?
-        .connect()
-        .await
+fn main() -> streamdeck::Result<()> {
+    streamdeck::block_on(async {
+        StreamDeck::new()?
+            .register_action(SayHelloAction)?
+            .connect()
+            .await
+    })
 }
 ```
 

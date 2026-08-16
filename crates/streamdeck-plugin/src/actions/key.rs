@@ -47,7 +47,7 @@ impl KeyAction {
             id: self.handle.id.clone(),
             manifest_id: self.handle.manifest_id.clone(),
             device: self.handle.device.clone(),
-            controller: self.handle.controller,
+            controller: self.handle.controller.clone(),
         }
     }
 

@@ -100,8 +100,19 @@ impl Logger {
         }
     }
 
+    pub fn enabled(&self, level: LogLevel) -> bool {
+        level >= self.shared.level
+    }
+
     pub fn trace(&self, message: impl AsRef<str>) {
         self.log(LogLevel::Trace, message.as_ref());
+    }
+
+    /// Build a TRACE message only when that level will actually be emitted.
+    pub fn trace_with(&self, message: impl FnOnce() -> String) {
+        if self.enabled(LogLevel::Trace) {
+            self.log(LogLevel::Trace, &message());
+        }
     }
 
     pub fn debug(&self, message: impl AsRef<str>) {
@@ -230,14 +241,109 @@ pub fn plugin_uuid_from_cwd() -> String {
         .unwrap_or_else(|| "plugin".into())
 }
 
+/// Log file stem: `.sdPlugin` folder name, then `-info` plugin UUID, then `-pluginUUID`.
+pub(crate) fn log_file_stem(
+    plugin_uuid_flag: Option<&str>,
+    info_plugin_uuid: Option<&str>,
+) -> String {
+    let from_cwd = plugin_uuid_from_cwd();
+    if from_cwd != "plugin" {
+        return from_cwd;
+    }
+    if let Some(id) = info_plugin_uuid.filter(|s| !s.is_empty()) {
+        return id.to_string();
+    }
+    if let Some(id) = plugin_uuid_flag.filter(|s| !s.is_empty()) {
+        return id.to_string();
+    }
+    "plugin".into()
+}
+
+/// Redact secrets and `setImage` payloads before tracing WebSocket JSON.
+pub(crate) fn redact_for_log(text: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(mut value) => {
+            let event = value
+                .get("event")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            if event.as_deref() == Some("didReceiveSecrets")
+                && let Some(payload) = value
+                    .get_mut("payload")
+                    .and_then(serde_json::Value::as_object_mut)
+            {
+                payload.insert(
+                    "secrets".into(),
+                    serde_json::Value::String("[redacted]".into()),
+                );
+            }
+            if event.as_deref() == Some("setImage")
+                && let Some(payload) = value
+                    .get_mut("payload")
+                    .and_then(serde_json::Value::as_object_mut)
+                && payload
+                    .get("image")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+            {
+                payload.insert(
+                    "image".into(),
+                    serde_json::Value::String("[redacted]".into()),
+                );
+            }
+            value.to_string()
+        }
+        Err(_) if text.contains("didReceiveSecrets") => "[redacted didReceiveSecrets]".into(),
+        Err(_) => text.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn logger_with_level(level: LogLevel) -> Logger {
+        Logger {
+            name: String::new(),
+            shared: Arc::new(LoggerShared {
+                level,
+                console: false,
+                file: Mutex::new(None),
+            }),
+        }
+    }
 
     #[test]
     fn parses_levels() {
         assert_eq!(LogLevel::parse("debug"), Some(LogLevel::Debug));
         assert_eq!(LogLevel::parse("WARN"), Some(LogLevel::Warn));
+    }
+
+    #[test]
+    fn trace_with_skips_closure_when_disabled() {
+        let logger = logger_with_level(LogLevel::Info);
+        let called = std::sync::atomic::AtomicBool::new(false);
+        logger.trace_with(|| {
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            "expensive".into()
+        });
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!logger.enabled(LogLevel::Trace));
+        assert!(logger.enabled(LogLevel::Info));
+    }
+
+    #[test]
+    fn redacts_secrets_and_set_image() {
+        let secrets = r#"{"event":"didReceiveSecrets","payload":{"secrets":{"token":"s3cret"}}}"#;
+        let redacted_secrets = redact_for_log(secrets);
+        assert!(!redacted_secrets.contains("s3cret"));
+        assert!(redacted_secrets.contains("[redacted]"));
+
+        let image = r#"{"event":"setImage","context":"c","payload":{"image":"data:image/png;base64,AAAA"}}"#;
+        let redacted_image = redact_for_log(image);
+        assert!(!redacted_image.contains("AAAA"));
+        assert!(redacted_image.contains("[redacted]"));
+        assert!(redacted_image.contains("setImage"));
     }
 
     #[test]

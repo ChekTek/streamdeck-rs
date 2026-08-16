@@ -53,18 +53,23 @@ impl SingletonAction for SayHelloAction {
     }
 }
 
-#[tokio::main]
-async fn main() -> streamdeck::Result<()> {
-    StreamDeck::new()?
-        .register_action(SayHelloAction)?
-        .connect()
-        .await
+fn main() -> streamdeck::Result<()> {
+    streamdeck::block_on(async {
+        StreamDeck::new()?
+            .register_action(SayHelloAction)?
+            .connect()
+            .await
+    })
 }
 ```
 
 Register every action **before** `connect()`. `connect()` runs until Stream Deck closes the socket.
 
+`streamdeck::block_on` starts Tokio with 8 MiB worker stacks. Default Tokio stacks are 2 MiB; rasterizing a key image (`resvg`, font shaping) on a worker can SIGSEGV. Prefer `tokio::task::spawn_blocking` for that work anyway. Panics in action callbacks are logged and do not stop the plugin.
+
 After `StreamDeck::new()`, process-wide accessors match the TypeScript `streamDeck.*` namespaces: `streamdeck::logger()`, `streamdeck::settings()`, `streamdeck::devices()`, `streamdeck::system()`, `streamdeck::ui()`, `streamdeck::profiles()`, `streamdeck::i18n()`, `streamdeck::info()`.
+
+Registration JSON keeps unknown `DeviceType`, `Language`, `Platform`, `Controller`, and `BarSubType` values instead of failing startup. `-info` parse errors include a JSON path (`devices[4].type`). The log file is opened from `-pluginUUID` **before** `-info` is parsed, and a successful handshake writes an INFO `connected, listening` line.
 
 ## Native `.sdPlugin` layout
 
@@ -96,7 +101,7 @@ streamdeck-plugin restart com.example.increment
 
 ## Logging
 
-Logs go to `logs/{pluginUUID}.log` under the plugin folder (UUID is taken from the `.sdPlugin` directory name). Set `STREAMDECK_LOG` or `RUST_LOG` (`trace`, `debug`, `info`, `warn`, `error`) to also print to stderr and to lower the level.
+Logs go to `logs/{pluginUUID}.log` under the plugin folder (UUID is taken from the `.sdPlugin` directory name, then `-pluginUUID`). The logger is created before `-info` is parsed so a bad registration payload is written to that file. Set `STREAMDECK_LOG` or `RUST_LOG` (`trace`, `debug`, `info`, `warn`, `error`) to also print to stderr and to lower the level. `setImage` payloads are redacted at `trace`.
 
 ## Feature version gates
 

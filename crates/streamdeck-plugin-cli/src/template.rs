@@ -60,9 +60,47 @@ fn path_dep(path: &Path) -> String {
     format!("streamdeck-plugin = {{ path = \"{escaped}\" }}")
 }
 
+/// True when `path` does not exist, or is a directory that only contains git
+/// metadata / README / LICENSE so `create` can scaffold into an existing repo.
+pub fn is_scaffoldable(path: &Path) -> bool {
+    if !path.exists() {
+        return true;
+    }
+    if !path.is_dir() {
+        return false;
+    }
+    match std::fs::read_dir(path) {
+        Ok(entries) => entries
+            .flatten()
+            .all(|entry| is_preserved_scaffold_entry(&entry.file_name())),
+        Err(_) => false,
+    }
+}
+
+fn is_preserved_scaffold_entry(name: &std::ffi::OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some(
+            ".git"
+                | ".gitignore"
+                | ".gitattributes"
+                | ".gitmodules"
+                | "README"
+                | "README.md"
+                | "LICENSE"
+                | "LICENSE.md"
+                | "LICENSE.txt"
+                | ".DS_Store"
+        )
+    )
+}
+
 pub fn render_template(destination: &Path, info: &PluginInfo) -> Result<()> {
-    if destination.exists() {
-        bail!("directory already exists: {}", destination.display());
+    if destination.exists() && !is_scaffoldable(destination) {
+        bail!(
+            "directory already exists and is not empty: {}",
+            destination.display()
+        );
     }
     std::fs::create_dir_all(destination)
         .with_context(|| format!("create {}", destination.display()))?;
@@ -76,6 +114,10 @@ pub fn render_template(destination: &Path, info: &PluginInfo) -> Result<()> {
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
+        }
+
+        if dest.exists() {
+            continue;
         }
 
         let bytes = file.data.as_ref();
@@ -212,6 +254,11 @@ mod tests {
         let action =
             std::fs::read_to_string(dest.join("src/actions/increment_counter.rs")).unwrap();
         assert!(action.contains("com.example.hello-world.increment"));
+        assert!(action.contains("pub struct CounterSettings"));
+
+        let main = std::fs::read_to_string(dest.join("src/main.rs")).unwrap();
+        assert!(main.contains("streamdeck::block_on"));
+        assert!(main.contains("set_use_experimental_message_identifiers"));
 
         let manifest: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(plugin.join("manifest.json")).unwrap())
@@ -278,5 +325,28 @@ mod tests {
             err.to_string()
                 .contains("STREAMDECK_PLUGIN_PATH does not point")
         );
+    }
+
+    #[test]
+    fn scaffoldable_allows_git_only_directories() {
+        let dest = test_dest("git-repo");
+        std::fs::create_dir_all(dest.join(".git")).unwrap();
+        std::fs::write(dest.join("README.md"), "# hello").unwrap();
+        assert!(is_scaffoldable(&dest));
+        render_template(&dest, &sample()).expect("render into git repo");
+        assert!(dest.join("Cargo.toml").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("README.md")).unwrap(),
+            "# hello"
+        );
+    }
+
+    #[test]
+    fn scaffoldable_rejects_directories_with_source() {
+        let dest = test_dest("occupied");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("Cargo.toml"), "[package]").unwrap();
+        assert!(!is_scaffoldable(&dest));
+        assert!(render_template(&dest, &sample()).is_err());
     }
 }

@@ -23,7 +23,7 @@ impl I18n {
     }
 
     pub fn language(&self) -> Language {
-        *self.language.read().expect("i18n")
+        self.language.read().expect("i18n").clone()
     }
 
     pub fn set_language(&self, language: Language) {
@@ -70,7 +70,7 @@ impl I18n {
 
 impl From<&Runtime> for I18n {
     fn from(runtime: &Runtime) -> Self {
-        Self::new(runtime.registration.info.application.language)
+        Self::new(runtime.registration.info.application.language.clone())
     }
 }
 

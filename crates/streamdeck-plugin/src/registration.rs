@@ -88,8 +88,38 @@ impl RegistrationParameters {
     }
 }
 
+pub(crate) fn flag_value<I, S>(args: I, flag: &str) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
+    let mut i = 0;
+    while i + 1 < args.len() {
+        if args[i] == flag {
+            return Some(args[i + 1].clone());
+        }
+        i += 1;
+    }
+    None
+}
+
 fn parse_info(value: &str) -> Result<RegistrationInfo> {
-    serde_json::from_str(value).map_err(Error::InvalidRegistrationInfo)
+    let mut deserializer = serde_json::Deserializer::from_str(value);
+    let info = serde_path_to_error::deserialize(&mut deserializer).map_err(|err| {
+        Error::InvalidRegistrationInfo {
+            path: err.path().to_string(),
+            source: err.into_inner(),
+        }
+    })?;
+    // `serde_json::from_str` also rejects trailing tokens after a valid value.
+    deserializer
+        .end()
+        .map_err(|source| Error::InvalidRegistrationInfo {
+            path: "$".into(),
+            source,
+        })?;
+    Ok(info)
 }
 
 #[cfg(test)]
@@ -144,5 +174,69 @@ mod tests {
         assert!(msg.contains("-pluginUUID"));
         assert!(msg.contains("-registerEvent"));
         assert!(msg.contains("-info"));
+    }
+
+    #[test]
+    fn registration_info_error_includes_json_path() {
+        let info = r#"{
+            "devices": [
+                {"id":"a","name":"A","size":{"columns":5,"rows":3},"type":0},
+                {"id":"b","name":"B","size":{"columns":5,"rows":3},"type":"nope"}
+            ]
+        }"#;
+        let err = RegistrationParameters::parse([
+            "-port",
+            "1",
+            "-pluginUUID",
+            "u",
+            "-registerEvent",
+            "registerPlugin",
+            "-info",
+            info,
+        ])
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("devices[1].type"), "{msg}");
+    }
+
+    #[test]
+    fn accepts_unknown_device_type_in_info() {
+        let info = r#"{
+            "plugin":{"uuid":"com.elgato.test","version":"0.1.0"},
+            "devices":[{"id":"ns","name":"NIGHTSWORD","size":{"columns":5,"rows":3},"type":-1}]
+        }"#;
+        let params = RegistrationParameters::parse([
+            "-port",
+            "1",
+            "-pluginUUID",
+            "u",
+            "-registerEvent",
+            "registerPlugin",
+            "-info",
+            info,
+        ])
+        .unwrap();
+        assert_eq!(
+            params.info.devices[0].device_type,
+            crate::protocol::DeviceType::Unknown(-1)
+        );
+    }
+
+    #[test]
+    fn rejects_trailing_tokens_after_registration_info() {
+        let info = format!("{} true", sample_info());
+        let err = RegistrationParameters::parse([
+            "-port",
+            "1",
+            "-pluginUUID",
+            "u",
+            "-registerEvent",
+            "registerPlugin",
+            "-info",
+            &info,
+        ])
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("trailing"), "{msg}");
     }
 }

@@ -9,7 +9,7 @@ use crate::stream_deck::{
     crate_name_from, generate_plugin_id, get_plugins, is_safe_base_name, is_valid_plugin_id,
     require_supported_host,
 };
-use crate::template::{PluginInfo, render_template, sdk_dependency};
+use crate::template::{PluginInfo, is_scaffoldable, render_template, sdk_dependency};
 
 use super::dev;
 use super::link;
@@ -52,8 +52,11 @@ pub fn run() -> Result<()> {
             info.uuid
         );
     }
-    if destination.exists() {
-        bail!("directory already exists: {}", destination.display());
+    if destination.exists() && !is_scaffoldable(&destination) {
+        bail!(
+            "directory already exists and is not empty: {}",
+            destination.display()
+        );
     }
 
     let crate_name = crate_name_from(
@@ -150,7 +153,7 @@ fn validate_destination(uuid: &str) -> Result<PathBuf> {
     let default = default_directory_name(uuid).to_string();
     let cwd = std::env::current_dir()?;
     let candidate = cwd.join(&default);
-    if is_safe_base_name(&default) && !candidate.exists() {
+    if is_safe_base_name(&default) && is_scaffoldable(&candidate) {
         return Ok(candidate);
     }
 
@@ -161,8 +164,10 @@ fn validate_destination(uuid: &str) -> Result<PathBuf> {
             if !is_safe_base_name(value) {
                 return Ok(Validation::Invalid("Directory name is invalid.".into()));
             }
-            if cwd_for_validator.join(value).exists() {
-                return Ok(Validation::Invalid("Directory already exists.".into()));
+            if !is_scaffoldable(&cwd_for_validator.join(value)) {
+                return Ok(Validation::Invalid(
+                    "Directory already exists and is not empty.".into(),
+                ));
             }
             Ok(Validation::Valid)
         })

@@ -15,8 +15,12 @@ pub enum Error {
     )]
     MissingRegistrationArgs(String),
 
-    #[error("Failed to parse Stream Deck registration info: {0}")]
-    InvalidRegistrationInfo(#[source] JsonError),
+    #[error("Failed to parse Stream Deck registration info at `{path}`: {source}")]
+    InvalidRegistrationInfo {
+        path: String,
+        #[source]
+        source: JsonError,
+    },
 
     #[error("Invalid version '{value}': expected {{major}}[.{{minor}}[.{{patch}}[.{{build}}]]]")]
     InvalidVersion { value: String },

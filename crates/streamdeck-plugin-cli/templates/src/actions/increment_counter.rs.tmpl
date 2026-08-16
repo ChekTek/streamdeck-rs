@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use streamdeck::{KeyDownEvent, SingletonAction, WillAppearEvent};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct CounterSettings {
+pub struct CounterSettings {
     #[serde(default)]
     count: u32,
     #[serde(default = "default_increment", rename = "incrementBy")]

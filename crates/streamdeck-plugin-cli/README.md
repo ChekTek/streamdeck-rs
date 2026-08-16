@@ -24,7 +24,7 @@ The executable is `streamdeck-plugin`. It does not replace Elgato’s Node CLI (
 | `stop\|s <uuid>` | `streamdeck://plugins/stop/<uuid>` |
 | `dev [-d]` | Enable or disable Stream Deck developer mode. |
 | `build [path]` | `cargo build --release` and copy the binary into `{uuid}.sdPlugin/bin/`. |
-| `validate [path]` | Light checks: folder name, manifest JSON, UUID match, current-platform `CodePath`, referenced icons. |
+| `validate [path]` | Light checks: folder name, manifest JSON, UUID match, current-platform `CodePath`, referenced icons (PNG or SVG). |
 | `pack\|bundle [path]` | Zip the `.sdPlugin` to `{uuid}.streamDeckPlugin`. Honors `.sdignore`. |
 
 Plugin install paths:
