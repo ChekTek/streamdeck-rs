@@ -1,0 +1,11 @@
+/target
+/logs
+**/logs/*.log
+**/*.rs.bk
+.DS_Store
+*.streamDeckPlugin
+**/tmp-tests/
+examples/increment-counter/com.example.increment.sdPlugin/bin/*
+examples/increment-counter/com.example.increment.sdPlugin/logs/*
+!examples/increment-counter/com.example.increment.sdPlugin/bin/.gitkeep
+!examples/increment-counter/com.example.increment.sdPlugin/logs/.gitkeep

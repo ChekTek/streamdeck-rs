@@ -1,0 +1,41 @@
+{
+    "UUID": "com.example.increment",
+    "Name": "Increment Counter",
+    "Version": "0.1.0.0",
+    "Author": "Example",
+    "Description": "Example Stream Deck plugin built with the Rust SDK. Increments a count on each key press.",
+    "Icon": "imgs/plugin",
+    "Category": "Example",
+    "CategoryIcon": "imgs/plugin",
+    "CodePathMac": "bin/increment-counter",
+    "CodePathWin": "bin/increment-counter.exe",
+    "SDKVersion": 2,
+    "Software": {
+        "MinimumVersion": "6.6"
+    },
+    "OS": [
+        {
+            "Platform": "mac",
+            "MinimumVersion": "12"
+        },
+        {
+            "Platform": "windows",
+            "MinimumVersion": "10"
+        }
+    ],
+    "Actions": [
+        {
+            "UUID": "com.example.increment.counter",
+            "Name": "Counter",
+            "Icon": "imgs/action",
+            "Tooltip": "Displays a count that increments on press.",
+            "Controllers": ["Keypad"],
+            "States": [
+                {
+                    "Image": "imgs/key",
+                    "TitleAlignment": "middle"
+                }
+            ]
+        }
+    ]
+}
