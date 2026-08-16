@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
+use uuid::Uuid;
 
 use crate::error::Result;
 use crate::events::{
@@ -76,10 +77,11 @@ impl SystemApi {
             .runtime
             .request(PluginCommand::GetSecrets {
                 context: self.runtime.plugin_uuid().to_string(),
+                id: Some(Uuid::new_v4().to_string()),
             })
             .await?;
         match ev.as_ref() {
-            crate::protocol::PluginEvent::DidReceiveSecrets { payload } => {
+            crate::protocol::PluginEvent::DidReceiveSecrets { payload, .. } => {
                 Ok(serde_json::from_value(payload.secrets.clone())?)
             }
             _ => Err(crate::error::Error::Message(

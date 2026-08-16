@@ -2,30 +2,25 @@
 
 Unofficial [Stream Deck](https://www.elgato.com/en/welcome-to-stream-deck) **plugin** SDK and CLI for Rust.
 
-This repository publishes two crates:
+This is a private workspace; the crates are not published to crates.io.
 
-| Crate | Install | Role |
-|-------|---------|------|
-| [`streamdeck-plugin`](crates/streamdeck-plugin) | `cargo add streamdeck-plugin` | Plugin SDK (`use streamdeck::...`) |
-| [`streamdeck-plugin-cli`](crates/streamdeck-plugin-cli) | `cargo install streamdeck-plugin-cli` | Binary **`streamdeck-plugin`** |
+| Crate | Role |
+|-------|------|
+| [`streamdeck-plugin`](crates/streamdeck-plugin) | Plugin SDK (`use streamdeck::...`) |
+| [`streamdeck-plugin-cli`](crates/streamdeck-plugin-cli) | Binary **`streamdeck-plugin`** |
 
 The CLI binary is `streamdeck-plugin`, not `streamdeck`. Elgato’s Node CLI (`@elgato/cli`) already owns `streamdeck` and `sd` on `PATH`.
 
 ## Quick start
 
+Point the scaffold at this checkout, then run the CLI from the workspace:
+
 ```bash
-cargo install streamdeck-plugin-cli
-streamdeck-plugin create
+export STREAMDECK_PLUGIN_PATH=$PWD/crates/streamdeck-plugin
+cargo run -p streamdeck-plugin-cli -- create
 ```
 
 The wizard scaffolds a native `.sdPlugin` (manifest, icons, increment-counter action, property inspector), builds the Rust binary, symlinks it into Stream Deck’s plugins folder, and restarts the plugin.
-
-Before the SDK is on crates.io, point the scaffold at this checkout:
-
-```bash
-export STREAMDECK_PLUGIN_PATH=/path/to/streamdeck-rs/crates/streamdeck-plugin
-cargo run -p streamdeck-plugin-cli -- create
-```
 
 ## Library usage
 

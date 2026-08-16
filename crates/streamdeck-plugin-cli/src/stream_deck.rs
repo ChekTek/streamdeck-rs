@@ -4,6 +4,14 @@ use anyhow::{Context, Result, bail};
 
 pub const PLUGIN_SUFFIX: &str = ".sdPlugin";
 
+pub fn require_supported_host() -> Result<()> {
+    if cfg!(target_os = "macos") || cfg!(windows) {
+        Ok(())
+    } else {
+        bail!("Stream Deck is not supported on this platform");
+    }
+}
+
 /// Installation directory Stream Deck loads plugins from.
 pub fn plugins_path() -> Result<PathBuf> {
     if let Ok(override_path) = std::env::var("STREAMDECK_PLUGINS_DIR") {

@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Unofficial Stream Deck plugin SDK for Rust"
+publish = false
 readme = "README.md"
 keywords = ["streamdeck", "elgato", "plugin", "sdk"]
 categories = ["api-bindings"]

@@ -216,7 +216,7 @@ impl Runtime {
             PluginCommand::GetSettings { context, .. }
             | PluginCommand::GetResources { context, .. }
             | PluginCommand::GetGlobalSettings { context, .. }
-            | PluginCommand::GetSecrets { context } => context.clone(),
+            | PluginCommand::GetSecrets { context, .. } => context.clone(),
             _ => String::new(),
         };
         let kind = match &command {
@@ -226,34 +226,20 @@ impl Runtime {
             PluginCommand::GetSecrets { .. } => "didReceiveSecrets",
             _ => "",
         };
+        let request_id = match &command {
+            PluginCommand::GetSettings { id, .. }
+            | PluginCommand::GetResources { id, .. }
+            | PluginCommand::GetGlobalSettings { id, .. }
+            | PluginCommand::GetSecrets { id, .. } => id.clone(),
+            _ => None,
+        };
         let mut rx = self.events.subscribe();
         self.send(command).await?;
         tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 match rx.recv().await {
                     Ok(ev) => {
-                        let matches = match ev.as_ref() {
-                            PluginEvent::DidReceiveSettings(m) if kind == "didReceiveSettings" => {
-                                m.context == context
-                            }
-                            PluginEvent::DidReceiveResources(m)
-                                if kind == "didReceiveResources" =>
-                            {
-                                m.context == context
-                            }
-                            PluginEvent::DidReceiveGlobalSettings { .. }
-                                if kind == "didReceiveGlobalSettings" =>
-                            {
-                                true
-                            }
-                            PluginEvent::DidReceiveSecrets { .. }
-                                if kind == "didReceiveSecrets" =>
-                            {
-                                true
-                            }
-                            _ => false,
-                        };
-                        if matches {
+                        if matches_request(ev.as_ref(), kind, &context, request_id.as_deref()) {
                             return Ok(ev);
                         }
                     }
@@ -279,5 +265,122 @@ impl Runtime {
 
     pub fn plugin_uuid(&self) -> &str {
         &self.registration.plugin_uuid
+    }
+}
+
+fn matches_request(
+    event: &PluginEvent,
+    kind: &str,
+    context: &str,
+    request_id: Option<&str>,
+) -> bool {
+    if event.name() != kind {
+        return false;
+    }
+    let context_ok = match event {
+        PluginEvent::DidReceiveSettings(m) | PluginEvent::DidReceiveResources(m) => {
+            m.context == context
+        }
+        PluginEvent::DidReceiveGlobalSettings { .. } | PluginEvent::DidReceiveSecrets { .. } => {
+            true
+        }
+        _ => false,
+    };
+    if !context_ok {
+        return false;
+    }
+    match (request_id, event.response_id()) {
+        (Some(expected), Some(actual)) => expected == actual,
+        // Stream Deck versions that ignore message identifiers omit `id` on the reply.
+        (Some(_), None) | (None, _) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn settings_event(context: &str, id: Option<&str>) -> PluginEvent {
+        serde_json::from_value(json!({
+            "event": "didReceiveSettings",
+            "action": "com.example.a",
+            "context": context,
+            "device": "dev",
+            "id": id,
+            "payload": {
+                "controller": "Keypad",
+                "settings": {},
+                "isInMultiAction": false
+            }
+        }))
+        .unwrap()
+    }
+
+    fn global_event(id: Option<&str>) -> PluginEvent {
+        serde_json::from_value(json!({
+            "event": "didReceiveGlobalSettings",
+            "id": id,
+            "payload": { "settings": { "n": 1 } }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn request_match_requires_echoed_id() {
+        let a = global_event(Some("req-a"));
+        let b = global_event(Some("req-b"));
+        assert!(matches_request(
+            &a,
+            "didReceiveGlobalSettings",
+            "plugin",
+            Some("req-a")
+        ));
+        assert!(!matches_request(
+            &a,
+            "didReceiveGlobalSettings",
+            "plugin",
+            Some("req-b")
+        ));
+        assert!(!matches_request(
+            &b,
+            "didReceiveGlobalSettings",
+            "plugin",
+            Some("req-a")
+        ));
+    }
+
+    #[test]
+    fn request_match_uses_context_and_id_for_settings() {
+        let ev = settings_event("ctx-1", Some("id-1"));
+        assert!(matches_request(
+            &ev,
+            "didReceiveSettings",
+            "ctx-1",
+            Some("id-1")
+        ));
+        assert!(!matches_request(
+            &ev,
+            "didReceiveSettings",
+            "ctx-2",
+            Some("id-1")
+        ));
+        assert!(!matches_request(
+            &ev,
+            "didReceiveSettings",
+            "ctx-1",
+            Some("id-2")
+        ));
+    }
+
+    #[test]
+    fn request_match_accepts_legacy_response_without_id() {
+        let ev = global_event(None);
+        assert!(matches_request(
+            &ev,
+            "didReceiveGlobalSettings",
+            "plugin",
+            Some("req-a")
+        ));
     }
 }

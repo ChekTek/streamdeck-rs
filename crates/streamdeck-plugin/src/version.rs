@@ -16,18 +16,20 @@ impl Version {
                 value: value.to_string(),
             });
         }
-        let mut segs = value.split('.');
-        let mut next = || {
-            segs.next()
-                .filter(|s| !s.is_empty())
-                .map(|s| s.parse::<u32>().unwrap_or(0))
-                .unwrap_or(0)
+        let segs: Vec<&str> = value.split('.').collect();
+        let parse_at = |i: usize| -> Result<u32> {
+            match segs.get(i).copied().filter(|s| !s.is_empty()) {
+                Some(s) => s.parse::<u32>().map_err(|_| Error::InvalidVersion {
+                    value: value.to_string(),
+                }),
+                None => Ok(0),
+            }
         };
         Ok(Self {
-            major: next(),
-            minor: next(),
-            patch: next(),
-            build: next(),
+            major: parse_at(0)?,
+            minor: parse_at(1)?,
+            patch: parse_at(2)?,
+            build: parse_at(3)?,
         })
     }
 
@@ -85,6 +87,8 @@ mod tests {
         );
         assert!(Version::parse("99.8.6.54321").is_ok());
         assert!(Version::parse("nope").is_err());
+        assert!(Version::parse("4294967296").is_err());
+        assert_eq!(Version::parse("4294967295").unwrap().major, u32::MAX);
     }
 
     #[test]

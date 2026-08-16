@@ -2,11 +2,11 @@
 
 Unofficial [Stream Deck](https://www.elgato.com/en/welcome-to-stream-deck) **plugin** SDK for Rust.
 
-The crates.io package is `streamdeck-plugin`; the Rust crate name stays `streamdeck`:
+This crate is not published to crates.io. Depend on it by path from this workspace. The Rust crate name stays `streamdeck`:
 
 ```toml
 [dependencies]
-streamdeck-plugin = "0.1"
+streamdeck-plugin = { path = "../streamdeck-plugin" }
 ```
 
 ```rust
@@ -15,7 +15,7 @@ use streamdeck::{KeyDownEvent, SingletonAction, StreamDeck};
 
 This crate clones the application layer of Elgato’s [`@elgato/streamdeck`](https://github.com/elgatosf/streamdeck/tree/main/packages/plugin) package. Stream Deck launches your plugin as a long-running process, passes WebSocket registration arguments, and this SDK talks JSON over `ws://127.0.0.1:{port}`.
 
-It does **not** talk HID to the hardware. That is the Stream Deck app’s job. Scaffolding, linking, and packing live in [`streamdeck-plugin-cli`](https://crates.io/crates/streamdeck-plugin-cli) (`cargo install streamdeck-plugin-cli`).
+It does **not** talk HID to the hardware. That is the Stream Deck app’s job. Scaffolding, linking, and packing live in [`streamdeck-plugin-cli`](../streamdeck-plugin-cli) (`cargo run -p streamdeck-plugin-cli`).
 
 Existing crates named `streamdeck` / `streamdeck-rs` on crates.io are HID drivers or thinner protocol wrappers. This library is the high-level action framework: `SingletonAction`, instance stores, settings, devices, UI, profiles, and version gates.
 

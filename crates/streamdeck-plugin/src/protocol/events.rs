@@ -40,7 +40,11 @@ pub enum PluginEvent {
         payload: SettingsOnlyPayload,
     },
     #[serde(rename = "didReceiveSecrets")]
-    DidReceiveSecrets { payload: SecretsPayload },
+    DidReceiveSecrets {
+        #[serde(default)]
+        id: Option<String>,
+        payload: SecretsPayload,
+    },
     #[serde(rename = "didReceiveSettings")]
     DidReceiveSettings(ActionMessageWithId<AppearPayload>),
     #[serde(rename = "didReceiveResources")]
@@ -97,6 +101,16 @@ impl PluginEvent {
             Self::TouchTap(_) => "touchTap",
             Self::WillAppear(_) => "willAppear",
             Self::WillDisappear(_) => "willDisappear",
+        }
+    }
+
+    pub fn response_id(&self) -> Option<&str> {
+        match self {
+            Self::DidReceiveGlobalSettings { id, .. } | Self::DidReceiveSecrets { id, .. } => {
+                id.as_deref()
+            }
+            Self::DidReceiveSettings(m) | Self::DidReceiveResources(m) => m.id.as_deref(),
+            _ => None,
         }
     }
 

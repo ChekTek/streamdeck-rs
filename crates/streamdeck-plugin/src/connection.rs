@@ -82,7 +82,8 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
 }
 
 async fn handle_text(runtime: &Arc<Runtime>, text: &str) {
-    runtime.logger.create_scope("Connection").trace(text);
+    let logged = redact_inbound(text);
+    runtime.logger.create_scope("Connection").trace(&logged);
     match serde_json::from_str::<PluginEvent>(text) {
         Ok(event) => {
             let _ = runtime.events.send(Arc::new(event.clone()));
@@ -94,20 +95,37 @@ async fn handle_text(runtime: &Arc<Runtime>, text: &str) {
                     runtime
                         .logger
                         .create_scope("Connection")
-                        .warn(format!("Received unknown message: {text}"));
+                        .warn(format!("Received unknown message: {logged}"));
                 } else {
                     runtime
                         .logger
                         .create_scope("Connection")
-                        .error(format!("Failed to parse message: {text} ({err})"));
+                        .error(format!("Failed to parse message: {logged} ({err})"));
                 }
             } else {
                 runtime
                     .logger
                     .create_scope("Connection")
-                    .error(format!("Failed to parse message: {text} ({err})"));
+                    .error(format!("Failed to parse message: {logged} ({err})"));
             }
         }
+    }
+}
+
+fn redact_inbound(text: &str) -> String {
+    match serde_json::from_str::<Value>(text) {
+        Ok(mut value) => {
+            if value.get("event").and_then(Value::as_str) == Some("didReceiveSecrets") {
+                if let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut) {
+                    payload.insert("secrets".into(), Value::String("[redacted]".into()));
+                }
+                value.to_string()
+            } else {
+                text.to_string()
+            }
+        }
+        Err(_) if text.contains("didReceiveSecrets") => "[redacted didReceiveSecrets]".into(),
+        Err(_) => text.to_string(),
     }
 }
 
@@ -730,5 +748,14 @@ mod tests {
         assert_eq!(v["context"], "c");
         assert_eq!(v["payload"]["title"], "Hello world");
         assert!(v["payload"].get("state").is_none());
+    }
+
+    #[test]
+    fn redacts_secrets_payloads() {
+        let raw = r#"{"event":"didReceiveSecrets","payload":{"secrets":{"token":"s3cret"}}}"#;
+        let redacted = redact_inbound(raw);
+        assert!(!redacted.contains("s3cret"));
+        assert!(redacted.contains("didReceiveSecrets"));
+        assert!(redacted.contains("[redacted]"));
     }
 }

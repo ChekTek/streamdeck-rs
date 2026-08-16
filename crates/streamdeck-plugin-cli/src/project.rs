@@ -4,7 +4,9 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::stream_deck::{PLUGIN_SUFFIX, is_sdplugin_dir, plugin_id_from_path};
+use crate::stream_deck::{
+    PLUGIN_SUFFIX, is_sdplugin_dir, plugin_id_from_path, require_supported_host,
+};
 
 #[derive(Debug, Clone)]
 pub struct PluginProject {
@@ -131,30 +133,34 @@ pub fn cargo_bin_and_target(manifest: &Path) -> Result<(String, PathBuf)> {
     Ok((bin.name.clone(), meta.target_directory))
 }
 
-pub fn release_bin_path(target_directory: &Path, bin_name: &str) -> PathBuf {
+pub fn release_bin_path(target_directory: &Path, bin_name: &str) -> Result<PathBuf> {
     let mut path = target_directory.join("release").join(bin_name);
     if cfg!(windows) {
         path.set_extension("exe");
+    } else if !cfg!(target_os = "macos") {
+        bail!("Stream Deck plugins can only be built on macOS or Windows");
     }
-    path
+    Ok(path)
 }
 
-pub fn plugin_bin_path(plugin_dir: &Path, bin_name: &str) -> PathBuf {
+pub fn plugin_bin_path(plugin_dir: &Path, bin_name: &str) -> Result<PathBuf> {
     let file = if cfg!(windows) {
         format!("{bin_name}.exe")
-    } else {
+    } else if cfg!(target_os = "macos") {
         bin_name.to_string()
+    } else {
+        bail!("Stream Deck plugins can only be built on macOS or Windows");
     };
-    plugin_dir.join("bin").join(file)
+    Ok(plugin_dir.join("bin").join(file))
 }
 
 pub fn copy_release_binary(manifest: &Path, plugin_dir: &Path) -> Result<PathBuf> {
     let (bin_name, target_dir) = cargo_bin_and_target(manifest)?;
-    let src = release_bin_path(&target_dir, &bin_name);
+    let src = release_bin_path(&target_dir, &bin_name)?;
     if !src.is_file() {
         bail!("release binary not found at {}", src.display());
     }
-    let dest = plugin_bin_path(plugin_dir, &bin_name);
+    let dest = plugin_bin_path(plugin_dir, &bin_name)?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -164,6 +170,7 @@ pub fn copy_release_binary(manifest: &Path, plugin_dir: &Path) -> Result<PathBuf
 }
 
 pub fn cargo_build_release(manifest: &Path) -> Result<()> {
+    require_supported_host()?;
     let output = Command::new("cargo")
         .args(["build", "--release", "--manifest-path"])
         .arg(manifest)

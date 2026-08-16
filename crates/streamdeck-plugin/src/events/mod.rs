@@ -213,13 +213,13 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = &s[i + 1..i + 3];
-            if let Ok(v) = u8::from_str_radix(hex, 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
         }
         if bytes[i] == b'+' {
             out.push(b' ');
@@ -229,6 +229,15 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -242,5 +251,12 @@ mod tests {
         assert_eq!(url.query, "name=elgato&key=123");
         assert_eq!(url.fragment, "heading");
         assert_eq!(url.query_parameters[0], ("name".into(), "elgato".into()));
+    }
+
+    #[test]
+    fn percent_decode_skips_multibyte_after_percent() {
+        let url = DeepLinkUrl::parse("/test?q=%€&ok=%2F");
+        assert_eq!(url.query_parameters[0], ("q".into(), "%€".into()));
+        assert_eq!(url.query_parameters[1], ("ok".into(), "/".into()));
     }
 }

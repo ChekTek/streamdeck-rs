@@ -25,7 +25,11 @@ pub enum PluginCommand {
         id: Option<String>,
     },
     #[serde(rename = "getSecrets")]
-    GetSecrets { context: String },
+    GetSecrets {
+        context: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     #[serde(rename = "setResources")]
     SetResources { context: String, payload: Resources },
     #[serde(rename = "getResources")]

@@ -10,10 +10,10 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 use crate::project::resolve_project;
-use crate::stream_deck::plugin_id_from_path;
+use crate::stream_deck::{plugin_id_from_path, require_supported_host};
 
 use super::build::build_if_cargo;
-use super::validate::validate_plugin;
+use super::validate::{is_valid_plugin_version, validate_plugin_for_pack};
 
 const DEFAULT_IGNORES: &[&str] = &[".sdignore", ".git", "/.env*", "*.log", "logs"];
 
@@ -25,6 +25,7 @@ pub fn run(
     version: Option<String>,
     ignore_validation: bool,
 ) -> Result<()> {
+    require_supported_host()?;
     let input = path.clone();
     let project = resolve_project(path)?;
     let plugin_dir = project.plugin_dir.clone();
@@ -34,7 +35,7 @@ pub fn run(
 
     let version_guard = ManifestVersion::apply(&plugin_dir, version.as_deref())?;
 
-    let errors = validate_plugin(&plugin_dir)?;
+    let errors = validate_plugin_for_pack(&plugin_dir)?;
     if !errors.is_empty() {
         for error in &errors {
             println!("{}", error.yellow());
@@ -141,7 +142,11 @@ fn collect_files(plugin_dir: &Path) -> Result<Vec<PackedFile>> {
         if gi.matched(&rel, false).is_ignore() {
             continue;
         }
-        let size = std::fs::metadata(&entry)?.len();
+        let size = match std::fs::symlink_metadata(&entry) {
+            Ok(meta) if meta.file_type().is_symlink() => continue,
+            Ok(meta) => meta.len(),
+            Err(_) => std::fs::metadata(&entry)?.len(),
+        };
         files.push(PackedFile {
             relative: rel,
             absolute: entry,
@@ -171,10 +176,14 @@ fn walkdir_files(root: &Path) -> Result<Vec<PathBuf>> {
     fn rec(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
             let path = entry.path();
-            if path.is_dir() {
+            if file_type.is_dir() {
                 rec(&path, files)?;
-            } else if path.is_file() {
+            } else if file_type.is_file() {
                 files.push(path);
             }
         }
@@ -191,9 +200,16 @@ fn write_zip(plugin_dir: &Path, files: &[PackedFile], output: &Path) -> Result<(
         .unwrap_or("plugin.sdPlugin");
     let file = File::create(output)?;
     let mut zip = ZipWriter::new(file);
-    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     for packed in files {
         let name = format!("{prefix}/{}", packed.relative);
+        let unix_mode = if packed.relative.starts_with("bin/") {
+            0o755
+        } else {
+            0o644
+        };
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(unix_mode);
         zip.start_file(name, options)?;
         let mut src = File::open(&packed.absolute)?;
         copy(&mut src, &mut zip)?;
@@ -224,7 +240,7 @@ impl ManifestVersion {
             .unwrap_or("")
             .to_string();
         let version = version.unwrap_or(&current);
-        let padded = pad_version(version);
+        let padded = pad_version(version)?;
         if let Some(obj) = manifest.as_object_mut() {
             obj.insert("Version".into(), Value::String(padded));
         }
@@ -248,12 +264,17 @@ impl Drop for ManifestVersion {
     }
 }
 
-fn pad_version(version: &str) -> String {
-    let mut parts: Vec<&str> = version.split('.').filter(|p| !p.is_empty()).collect();
+fn pad_version(version: &str) -> Result<String> {
+    if !is_valid_plugin_version(version) {
+        bail!(
+            "invalid plugin version `{version}`: expected 1 to 4 numeric components (e.g. 1.2.3.4)"
+        );
+    }
+    let mut parts: Vec<&str> = version.split('.').collect();
     while parts.len() < 4 {
         parts.push("0");
     }
-    parts.join(".")
+    Ok(parts.join("."))
 }
 
 fn size_as_string(bytes: u64) -> String {
@@ -275,8 +296,10 @@ mod tests {
 
     #[test]
     fn pads_versions() {
-        assert_eq!(pad_version("1.2"), "1.2.0.0");
-        assert_eq!(pad_version("1.2.3.4"), "1.2.3.4");
+        assert_eq!(pad_version("1.2").unwrap(), "1.2.0.0");
+        assert_eq!(pad_version("1.2.3.4").unwrap(), "1.2.3.4");
+        assert!(pad_version("1.foo").is_err());
+        assert!(pad_version("1.2.3.4.5").is_err());
     }
 
     #[test]
@@ -320,5 +343,37 @@ mod tests {
         assert!(zip_path.is_file());
         let bytes = std::fs::read(&zip_path).unwrap();
         assert!(bytes.len() > 20);
+
+        let mut archive = zip::ZipArchive::new(File::open(&zip_path).unwrap()).unwrap();
+        let bin = archive
+            .by_name("com.example.pack.sdPlugin/bin/pack")
+            .unwrap();
+        assert_eq!(bin.unix_mode().unwrap() & 0o777, 0o755);
+        drop(bin);
+        let manifest = archive
+            .by_name("com.example.pack.sdPlugin/manifest.json")
+            .unwrap();
+        assert_eq!(manifest.unix_mode().unwrap() & 0o777, 0o644);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skips_symlinks_when_packing() {
+        let dir = tempdir().unwrap();
+        let plugin = dir.path().join("com.example.link.sdPlugin");
+        std::fs::create_dir_all(plugin.join("bin")).unwrap();
+        std::fs::write(
+            plugin.join("manifest.json"),
+            r#"{"UUID":"com.example.link","Version":"0.1.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(plugin.join("bin/link"), b"ok").unwrap();
+        let outside = dir.path().join("secret.txt");
+        std::fs::write(&outside, b"secret").unwrap();
+        std::os::unix::fs::symlink(&outside, plugin.join("leaked.txt")).unwrap();
+
+        let files = collect_files(&plugin).unwrap();
+        assert!(files.iter().all(|f| f.relative != "leaked.txt"));
+        assert!(files.iter().any(|f| f.relative == "bin/link"));
     }
 }

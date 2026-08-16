@@ -34,4 +34,4 @@ Add the **Counter** action to a key and press it.
 
 ## Icons
 
-This example’s `imgs/` paths are placeholders. Replace them with real artwork before shipping, or start from `streamdeck-plugin create`, which includes 1x/2x icons.
+1x/2x artwork lives under `com.example.increment.sdPlugin/imgs/`, matching the scaffold from `streamdeck-plugin create`.

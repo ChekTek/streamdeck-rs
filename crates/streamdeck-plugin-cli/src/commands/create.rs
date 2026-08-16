@@ -7,6 +7,7 @@ use inquire::{Confirm, Text, validator::Validation};
 use crate::project::{cargo_build_release, copy_release_binary};
 use crate::stream_deck::{
     crate_name_from, generate_plugin_id, get_plugins, is_safe_base_name, is_valid_plugin_id,
+    require_supported_host,
 };
 use crate::template::{PluginInfo, render_template};
 
@@ -15,6 +16,7 @@ use super::link;
 use super::restart;
 
 pub fn run() -> Result<()> {
+    require_supported_host()?;
     println!(
         "Welcome to the {} creation wizard.",
         "Stream Deck Plugin".green()

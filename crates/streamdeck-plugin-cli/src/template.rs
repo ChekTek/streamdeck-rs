@@ -106,7 +106,16 @@ fn substitutions(info: &PluginInfo) -> HashMap<String, String> {
     vars.insert("name_json".into(), json_string(&info.name));
     vars.insert("description_json".into(), json_string(&info.description));
     vars.insert("uuid_json".into(), json_string(&info.uuid));
+    vars.insert("os_json".into(), host_os_json());
     vars
+}
+
+fn host_os_json() -> String {
+    if cfg!(windows) {
+        r#"[{ "Platform": "windows", "MinimumVersion": "10" }]"#.into()
+    } else {
+        r#"[{ "Platform": "mac", "MinimumVersion": "12" }]"#.into()
+    }
 }
 
 fn json_string(value: &str) -> String {
@@ -177,6 +186,12 @@ mod tests {
         assert!(manifest.get("Nodejs").is_none());
         assert_eq!(manifest["CodePathMac"], "bin/hello-world");
         assert_eq!(manifest["CodePathWin"], "bin/hello-world.exe");
+        let os = manifest["OS"].as_array().expect("OS");
+        assert_eq!(os.len(), 1);
+        #[cfg(windows)]
+        assert_eq!(os[0]["Platform"], "windows");
+        #[cfg(not(windows))]
+        assert_eq!(os[0]["Platform"], "mac");
     }
 
     #[test]
