@@ -4,9 +4,67 @@ use serde_json::{Map, Value};
 use super::types::{Controller, Coordinates, DeviceInfo, State};
 
 /// Events received by the plugin from Stream Deck.
+///
+/// Unknown `event` names are preserved as [`PluginEvent::Unknown`] so a new Stream Deck
+/// event cannot fail inbound parsing or drop the WebSocket frame.
+#[derive(Debug, Clone)]
+pub enum PluginEvent {
+    ApplicationDidLaunch {
+        payload: ApplicationPayload,
+    },
+    ApplicationDidTerminate {
+        payload: ApplicationPayload,
+    },
+    DeviceDidChange {
+        device: String,
+        device_info: DeviceInfo,
+    },
+    DeviceDidConnect {
+        device: String,
+        device_info: DeviceInfo,
+    },
+    DeviceDidDisconnect {
+        device: String,
+    },
+    DialDown(ActionMessage<EncoderPayload>),
+    DialUp(ActionMessage<EncoderPayload>),
+    DialRotate(ActionMessage<DialRotatePayload>),
+    DidReceiveDeepLink {
+        payload: DeepLinkPayload,
+    },
+    DidReceiveGlobalSettings {
+        id: Option<String>,
+        payload: SettingsOnlyPayload,
+    },
+    DidReceiveSecrets {
+        id: Option<String>,
+        payload: SecretsPayload,
+    },
+    DidReceiveSettings(ActionMessageWithId<AppearPayload>),
+    DidReceiveResources(ActionMessageWithId<AppearPayload>),
+    KeyDown(ActionMessage<KeyGesturePayload>),
+    KeyUp(ActionMessage<KeyGesturePayload>),
+    PropertyInspectorDidAppear(ActionIdentifier),
+    PropertyInspectorDidDisappear(ActionIdentifier),
+    SendToPlugin {
+        action: String,
+        context: String,
+        payload: Value,
+    },
+    SystemDidWakeUp,
+    TitleParametersDidChange(ActionMessage<TitleParametersPayload>),
+    TouchTap(ActionMessage<TouchTapPayload>),
+    WillAppear(ActionMessage<AppearPayload>),
+    WillDisappear(ActionMessage<AppearPayload>),
+    /// Event name this SDK does not model yet. The original JSON is preserved.
+    Unknown(Value),
+}
+
+/// Wire form of [`PluginEvent`] without the unknown catch-all. Known event names
+/// still fail closed when their payload is malformed.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "event")]
-pub enum PluginEvent {
+enum KnownPluginEvent {
     #[serde(rename = "applicationDidLaunch")]
     ApplicationDidLaunch { payload: ApplicationPayload },
     #[serde(rename = "applicationDidTerminate")]
@@ -75,8 +133,118 @@ pub enum PluginEvent {
     WillDisappear(ActionMessage<AppearPayload>),
 }
 
+impl From<KnownPluginEvent> for PluginEvent {
+    fn from(event: KnownPluginEvent) -> Self {
+        match event {
+            KnownPluginEvent::ApplicationDidLaunch { payload } => {
+                Self::ApplicationDidLaunch { payload }
+            }
+            KnownPluginEvent::ApplicationDidTerminate { payload } => {
+                Self::ApplicationDidTerminate { payload }
+            }
+            KnownPluginEvent::DeviceDidChange {
+                device,
+                device_info,
+            } => Self::DeviceDidChange {
+                device,
+                device_info,
+            },
+            KnownPluginEvent::DeviceDidConnect {
+                device,
+                device_info,
+            } => Self::DeviceDidConnect {
+                device,
+                device_info,
+            },
+            KnownPluginEvent::DeviceDidDisconnect { device } => {
+                Self::DeviceDidDisconnect { device }
+            }
+            KnownPluginEvent::DialDown(m) => Self::DialDown(m),
+            KnownPluginEvent::DialUp(m) => Self::DialUp(m),
+            KnownPluginEvent::DialRotate(m) => Self::DialRotate(m),
+            KnownPluginEvent::DidReceiveDeepLink { payload } => {
+                Self::DidReceiveDeepLink { payload }
+            }
+            KnownPluginEvent::DidReceiveGlobalSettings { id, payload } => {
+                Self::DidReceiveGlobalSettings { id, payload }
+            }
+            KnownPluginEvent::DidReceiveSecrets { id, payload } => {
+                Self::DidReceiveSecrets { id, payload }
+            }
+            KnownPluginEvent::DidReceiveSettings(m) => Self::DidReceiveSettings(m),
+            KnownPluginEvent::DidReceiveResources(m) => Self::DidReceiveResources(m),
+            KnownPluginEvent::KeyDown(m) => Self::KeyDown(m),
+            KnownPluginEvent::KeyUp(m) => Self::KeyUp(m),
+            KnownPluginEvent::PropertyInspectorDidAppear(m) => Self::PropertyInspectorDidAppear(m),
+            KnownPluginEvent::PropertyInspectorDidDisappear(m) => {
+                Self::PropertyInspectorDidDisappear(m)
+            }
+            KnownPluginEvent::SendToPlugin {
+                action,
+                context,
+                payload,
+            } => Self::SendToPlugin {
+                action,
+                context,
+                payload,
+            },
+            KnownPluginEvent::SystemDidWakeUp => Self::SystemDidWakeUp,
+            KnownPluginEvent::TitleParametersDidChange(m) => Self::TitleParametersDidChange(m),
+            KnownPluginEvent::TouchTap(m) => Self::TouchTap(m),
+            KnownPluginEvent::WillAppear(m) => Self::WillAppear(m),
+            KnownPluginEvent::WillDisappear(m) => Self::WillDisappear(m),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginEvent {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        parse_plugin_event(value).map_err(serde::de::Error::custom)
+    }
+}
+
+fn parse_plugin_event(value: Value) -> Result<PluginEvent, serde_json::Error> {
+    match value.get("event").and_then(Value::as_str) {
+        Some(name) if is_known_plugin_event(name) => {
+            KnownPluginEvent::deserialize(value).map(PluginEvent::from)
+        }
+        Some(_) => Ok(PluginEvent::Unknown(value)),
+        None => KnownPluginEvent::deserialize(value).map(PluginEvent::from),
+    }
+}
+
+fn is_known_plugin_event(name: &str) -> bool {
+    matches!(
+        name,
+        "applicationDidLaunch"
+            | "applicationDidTerminate"
+            | "deviceDidChange"
+            | "deviceDidConnect"
+            | "deviceDidDisconnect"
+            | "dialDown"
+            | "dialUp"
+            | "dialRotate"
+            | "didReceiveDeepLink"
+            | "didReceiveGlobalSettings"
+            | "didReceiveSecrets"
+            | "didReceiveSettings"
+            | "didReceiveResources"
+            | "keyDown"
+            | "keyUp"
+            | "propertyInspectorDidAppear"
+            | "propertyInspectorDidDisappear"
+            | "sendToPlugin"
+            | "systemDidWakeUp"
+            | "titleParametersDidChange"
+            | "touchTap"
+            | "willAppear"
+            | "willDisappear"
+    )
+}
+
 impl PluginEvent {
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> &str {
         match self {
             Self::ApplicationDidLaunch { .. } => "applicationDidLaunch",
             Self::ApplicationDidTerminate { .. } => "applicationDidTerminate",
@@ -101,6 +269,10 @@ impl PluginEvent {
             Self::TouchTap(_) => "touchTap",
             Self::WillAppear(_) => "willAppear",
             Self::WillDisappear(_) => "willDisappear",
+            Self::Unknown(value) => value
+                .get("event")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
         }
     }
 
@@ -345,5 +517,35 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn keeps_unknown_event_json() {
+        let json = r#"{"event":"didReceiveNewThing","payload":{"x":1},"extra":true}"#;
+        let ev: PluginEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(ev.name(), "didReceiveNewThing");
+        match ev {
+            PluginEvent::Unknown(value) => {
+                assert_eq!(value["event"], "didReceiveNewThing");
+                assert_eq!(value["payload"]["x"], 1);
+                assert_eq!(value["extra"], true);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_known_event_still_fails() {
+        let err = serde_json::from_str::<PluginEvent>(r#"{"event":"willAppear"}"#).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing field") || msg.contains("willAppear"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn missing_event_field_still_fails() {
+        assert!(serde_json::from_str::<PluginEvent>(r#"{"foo":1}"#).is_err());
     }
 }
