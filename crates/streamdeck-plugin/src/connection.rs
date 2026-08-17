@@ -72,7 +72,7 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
     let worker_runtime = runtime.clone();
     let worker = tokio::spawn(async move {
         while let Some(event) = dispatch_rx.recv().await {
-            let event_name = event.name();
+            let event_name = event.name().to_string();
             if let Err(payload) = AssertUnwindSafe(dispatch(&worker_runtime, event))
                 .catch_unwind()
                 .await
@@ -276,6 +276,13 @@ async fn dispatch(runtime: &Arc<Runtime>, event: PluginEvent) {
                 .await;
         }
         PluginEvent::DidReceiveSecrets { .. } => {}
+        PluginEvent::Unknown(raw) => {
+            let logged = redact_for_log(&raw.to_string());
+            runtime
+                .logger
+                .create_scope("Connection")
+                .warn(format!("Received unknown event: {logged}"));
+        }
     }
 }
 
@@ -311,18 +318,7 @@ fn action_from_appear(
         msg.payload.controller.clone(),
     )?;
     match &msg.payload.controller {
-        Controller::Keypad => {
-            let coords = if msg.payload.is_in_multi_action {
-                None
-            } else {
-                msg.payload.coordinates
-            };
-            Ok(Action::Key(KeyAction::new(
-                handle,
-                coords,
-                msg.payload.is_in_multi_action,
-            )))
-        }
+        Controller::Keypad => Ok(key_action_from_appear(handle, &msg.payload)),
         Controller::Encoder => {
             let coords = msg
                 .payload
@@ -330,11 +326,23 @@ fn action_from_appear(
                 .ok_or_else(|| Error::Message("encoder willAppear missing coordinates".into()))?;
             Ok(Action::Dial(DialAction::new(handle, coords)))
         }
-        Controller::Unknown(name) => Err(Error::Message(format!(
-            "unknown controller `{name}` for action {}",
-            msg.action
-        ))),
+        Controller::Unknown(name) => {
+            runtime.logger.warn(format!(
+                "unknown controller `{name}` for action {}",
+                msg.action
+            ));
+            Ok(key_action_from_appear(handle, &msg.payload))
+        }
     }
+}
+
+fn key_action_from_appear(handle: ActionHandle, payload: &AppearPayload) -> Action {
+    let coords = if payload.is_in_multi_action {
+        None
+    } else {
+        payload.coordinates
+    };
+    Action::Key(KeyAction::new(handle, coords, payload.is_in_multi_action))
 }
 
 async fn on_will_appear(runtime: &Arc<Runtime>, msg: ActionMessage<AppearPayload>) {
@@ -1023,6 +1031,179 @@ mod tests {
             .unwrap();
         assert_eq!(cmd["event"], "setTitle");
         assert_eq!(cmd["payload"]["title"], "survived");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
+    }
+
+    struct AppearTitleAction;
+
+    impl SingletonAction for AppearTitleAction {
+        const UUID: &'static str = "com.elgato.test.one";
+        type Settings = Value;
+
+        async fn on_will_appear(&self, ev: WillAppearEvent<Self::Settings>) {
+            let title = ev.action.controller().as_str().to_string();
+            if let Some(key) = ev.action.as_key() {
+                let _ = key.set_title(title).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_controller_will_appear_creates_action() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let info = info_json();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let first = ws.next().await.unwrap().unwrap();
+            let Message::Text(_) = first else {
+                panic!("expected text")
+            };
+
+            let will_appear = json!({
+                "event": "willAppear",
+                "action": "com.elgato.test.one",
+                "context": "context123",
+                "device": "device123",
+                "payload": {
+                    "controller": "Touchscreen",
+                    "coordinates": { "column": 0, "row": 0 },
+                    "isInMultiAction": false,
+                    "resources": {},
+                    "settings": {}
+                }
+            });
+            ws.send(Message::Text(will_appear.to_string().into()))
+                .await
+                .unwrap();
+
+            let reply = ws.next().await.unwrap().unwrap();
+            let Message::Text(text) = reply else {
+                panic!("expected text")
+            };
+            let cmd: Value = serde_json::from_str(text.as_str()).unwrap();
+            let _ = ws.close(None).await;
+            cmd
+        });
+
+        let plugin = tokio::spawn(async move {
+            StreamDeck::from_args([
+                "-port",
+                &port.to_string(),
+                "-pluginUUID",
+                "abc123",
+                "-registerEvent",
+                "registerPlugin",
+                "-info",
+                &info,
+            ])
+            .unwrap()
+            .register_action(AppearTitleAction)
+            .unwrap()
+            .connect()
+            .await
+        });
+
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server timed out")
+            .unwrap();
+        assert_eq!(cmd["event"], "setTitle");
+        assert_eq!(cmd["payload"]["title"], "Touchscreen");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
+    }
+
+    #[tokio::test]
+    async fn unknown_event_does_not_drop_later_messages() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let info = info_json();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let first = ws.next().await.unwrap().unwrap();
+            let Message::Text(_) = first else {
+                panic!("expected text")
+            };
+
+            let unknown = json!({
+                "event": "didReceiveNewThing",
+                "payload": { "x": 1 }
+            });
+            ws.send(Message::Text(unknown.to_string().into()))
+                .await
+                .unwrap();
+
+            let will_appear = json!({
+                "event": "willAppear",
+                "action": "com.elgato.test.one",
+                "context": "context123",
+                "device": "device123",
+                "payload": {
+                    "controller": "Keypad",
+                    "coordinates": { "column": 1, "row": 2 },
+                    "isInMultiAction": false,
+                    "resources": {},
+                    "settings": {}
+                }
+            });
+            ws.send(Message::Text(will_appear.to_string().into()))
+                .await
+                .unwrap();
+
+            let key_down = json!({
+                "event": "keyDown",
+                "action": "com.elgato.test.one",
+                "context": "context123",
+                "device": "device123",
+                "payload": {
+                    "controller": "Keypad",
+                    "coordinates": { "column": 1, "row": 2 },
+                    "isInMultiAction": false,
+                    "resources": {},
+                    "settings": {}
+                }
+            });
+            ws.send(Message::Text(key_down.to_string().into()))
+                .await
+                .unwrap();
+
+            let reply = ws.next().await.unwrap().unwrap();
+            let Message::Text(text) = reply else {
+                panic!("expected text")
+            };
+            let cmd: Value = serde_json::from_str(text.as_str()).unwrap();
+            let _ = ws.close(None).await;
+            cmd
+        });
+
+        let plugin = tokio::spawn(async move {
+            StreamDeck::from_args([
+                "-port",
+                &port.to_string(),
+                "-pluginUUID",
+                "abc123",
+                "-registerEvent",
+                "registerPlugin",
+                "-info",
+                &info,
+            ])
+            .unwrap()
+            .register_action(HelloAction)
+            .unwrap()
+            .connect()
+            .await
+        });
+
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server timed out")
+            .unwrap();
+        assert_eq!(cmd["event"], "setTitle");
+        assert_eq!(cmd["payload"]["title"], "Hello world");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
     }
 }

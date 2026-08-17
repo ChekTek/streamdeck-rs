@@ -69,7 +69,7 @@ Register every action **before** `connect()`. `connect()` runs until Stream Deck
 
 After `StreamDeck::new()`, process-wide accessors match the TypeScript `streamDeck.*` namespaces: `streamdeck::logger()`, `streamdeck::settings()`, `streamdeck::devices()`, `streamdeck::system()`, `streamdeck::ui()`, `streamdeck::profiles()`, `streamdeck::i18n()`, `streamdeck::info()`.
 
-Registration JSON keeps unknown `DeviceType`, `Language`, `Platform`, `Controller`, and `BarSubType` values instead of failing startup. `-info` parse errors include a JSON path (`devices[4].type`). The log file is opened from `-pluginUUID` **before** `-info` is parsed, and a successful handshake writes an INFO `connected, listening` line.
+Registration JSON keeps unknown `DeviceType`, `Language`, `Platform`, `Controller`, and `BarSubType` values instead of failing startup. Inbound WebSocket frames keep unknown event names as `PluginEvent::Unknown` (raw JSON) instead of dropping the message. An unknown `Controller` on `willAppear` is logged and still creates the action. `-info` parse errors include a JSON path (`devices[4].type`). The log file is opened from `-pluginUUID` **before** `-info` is parsed, and a successful handshake writes an INFO `connected, listening` line.
 
 ## Native `.sdPlugin` layout
 
