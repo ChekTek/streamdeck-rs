@@ -197,22 +197,23 @@ impl Runtime {
     }
 
     pub fn set_legacy_settings_behavior(&self, value: bool) -> Result<()> {
+        // Validate before publishing so other threads never observe an unsupported mode.
+        self.validate_settings_behavior_for(value)?;
         let prev = self.legacy_settings_behavior.swap(value, Ordering::SeqCst);
-        if prev == value {
-            return Ok(());
+        if prev != value {
+            self.settings_cache.lock().expect("settings cache").clear();
         }
-        if let Err(err) = self.validate_settings_behavior() {
-            self.legacy_settings_behavior.store(prev, Ordering::SeqCst);
-            return Err(err);
-        }
-        self.settings_cache.lock().expect("settings cache").clear();
         Ok(())
     }
 
     /// The default (non-legacy) settings behavior relies on message identifiers, which
     /// need Stream Deck 7.1 and `Software.MinimumVersion` 7.1.
     pub fn validate_settings_behavior(&self) -> Result<()> {
-        if self.legacy_settings_behavior() {
+        self.validate_settings_behavior_for(self.legacy_settings_behavior())
+    }
+
+    fn validate_settings_behavior_for(&self, legacy: bool) -> Result<()> {
+        if legacy {
             return Ok(());
         }
         crate::validation::requires_version(
@@ -405,5 +406,45 @@ mod tests {
             "plugin",
             Some("req-a")
         ));
+    }
+
+    fn runtime_with_version(version: &str) -> Arc<Runtime> {
+        let info = serde_json::from_value(json!({
+            "application": { "version": version },
+            "plugin": { "uuid": "x", "version": "1" }
+        }))
+        .unwrap();
+        Runtime::new(RegistrationParameters {
+            port: "1".into(),
+            plugin_uuid: "u".into(),
+            register_event: "registerPlugin".into(),
+            info,
+        })
+    }
+
+    fn cache_settings(rt: &Runtime) {
+        rt.settings_cache
+            .lock()
+            .unwrap()
+            .insert("ctx".into(), json!({}));
+    }
+
+    #[test]
+    fn toggling_settings_behavior_clears_cache() {
+        let rt = runtime_with_version("7.1");
+        cache_settings(&rt);
+        rt.set_legacy_settings_behavior(true).unwrap();
+        assert!(rt.legacy_settings_behavior());
+        assert!(rt.settings_cache.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_settings_behavior_toggle_keeps_mode_and_cache() {
+        let rt = runtime_with_version("7.0");
+        rt.set_legacy_settings_behavior(true).unwrap();
+        cache_settings(&rt);
+        assert!(rt.set_legacy_settings_behavior(false).is_err());
+        assert!(rt.legacy_settings_behavior());
+        assert_eq!(rt.settings_cache.lock().unwrap().len(), 1);
     }
 }

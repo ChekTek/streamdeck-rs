@@ -30,10 +30,10 @@ pub fn requires_version(
         .and_then(|m| m.software_minimum_version())
         && min.compare_to(&required) < 0
     {
-        return Err(Error::NotSupported {
+        return Err(Error::ManifestMinimumVersionNotSupported {
             feature: feature.to_string(),
             required: required_s,
-            current: min.as_major_minor(),
+            manifest_minimum: min.as_major_minor(),
         });
     }
     Ok(())
@@ -83,11 +83,13 @@ mod tests {
             Some(serde_json::from_str(r#"{"Software":{"MinimumVersion":"6.6"}}"#).unwrap());
         let err = requires_version(7, 0, &rt.version, "onDeviceDidChange", &rt).unwrap_err();
         match err {
-            Error::NotSupported {
-                required, current, ..
+            Error::ManifestMinimumVersionNotSupported {
+                required,
+                manifest_minimum,
+                ..
             } => {
                 assert_eq!(required, "7.0");
-                assert_eq!(current, "6.6");
+                assert_eq!(manifest_minimum, "6.6");
             }
             other => panic!("unexpected error: {other}"),
         }

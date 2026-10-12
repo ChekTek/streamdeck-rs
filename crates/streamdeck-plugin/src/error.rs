@@ -34,6 +34,15 @@ pub enum Error {
         current: String,
     },
 
+    #[error(
+        "[ERR_NOT_SUPPORTED]: {feature} requires Stream Deck version {required} or higher; please update the \"Software.MinimumVersion\" in the plugin's manifest from \"{manifest_minimum}\" to \"{required}\" or higher."
+    )]
+    ManifestMinimumVersionNotSupported {
+        feature: String,
+        required: String,
+        manifest_minimum: String,
+    },
+
     #[error("The action's UUID cannot be empty.")]
     MissingActionUuid,
 

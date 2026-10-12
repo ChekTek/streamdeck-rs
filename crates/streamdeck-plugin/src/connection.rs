@@ -1226,4 +1226,138 @@ mod tests {
         assert_eq!(cmd["payload"]["title"], "Hello world");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
     }
+
+    fn info_json_with_version(version: &str) -> String {
+        let mut info: Value = serde_json::from_str(&info_json()).unwrap();
+        info["application"]["version"] = json!(version);
+        info.to_string()
+    }
+
+    fn plugin_args(port: u16, info: &str) -> Vec<String> {
+        [
+            "-port",
+            &port.to_string(),
+            "-pluginUUID",
+            "abc123",
+            "-registerEvent",
+            "registerPlugin",
+            "-info",
+            info,
+        ]
+        .map(String::from)
+        .to_vec()
+    }
+
+    #[tokio::test]
+    async fn connect_requires_stream_deck_7_1_unless_legacy() {
+        let info = info_json_with_version("7.0");
+
+        // Default settings behavior is rejected before connecting.
+        let err = StreamDeck::from_args(plugin_args(1, &info))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap_err();
+        match err {
+            Error::NotSupported { current, .. } => assert_eq!(current, "7.0"),
+            other => panic!("unexpected error: {other}"),
+        }
+
+        // Legacy behavior connects; switching back fails and keeps legacy.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let _registration = ws.next().await.unwrap().unwrap();
+            let _ = ws.close(None).await;
+        });
+
+        let plugin = StreamDeck::from_args(plugin_args(port, &info)).unwrap();
+        let settings = plugin.settings();
+        settings.set_use_legacy_settings_behavior(true).unwrap();
+        assert!(settings.set_use_legacy_settings_behavior(false).is_err());
+        assert!(settings.use_legacy_settings_behavior());
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), plugin.connect())
+            .await
+            .expect("connect timed out")
+            .unwrap();
+        server.await.unwrap();
+    }
+
+    struct NeoFeedbackAction;
+
+    impl SingletonAction for NeoFeedbackAction {
+        const UUID: &'static str = "com.elgato.test.one";
+        type Settings = Value;
+
+        async fn on_will_appear(&self, ev: WillAppearEvent<Self::Settings>) {
+            let neo = ev.action.as_neo_infobar().expect("Neo infobar action");
+            let coords = neo.coordinates();
+            // Served from the willAppear settings cache; no getSettings round-trip.
+            let settings: Value = neo.get_settings().await.unwrap();
+            let _ = neo
+                .set_feedback(json!({
+                    "title": format!("{},{} {}", coords.column, coords.row, settings["label"].as_str().unwrap_or("missing")),
+                }))
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn neo_will_appear_creates_infobar_action() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let info = info_json();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let _registration = ws.next().await.unwrap().unwrap();
+
+            let will_appear = json!({
+                "event": "willAppear",
+                "action": "com.elgato.test.one",
+                "context": "context123",
+                "device": "device123",
+                "payload": {
+                    "controller": "Neo",
+                    "coordinates": { "column": 2, "row": 0 },
+                    "isInMultiAction": false,
+                    "resources": {},
+                    "settings": { "label": "cached" }
+                }
+            });
+            ws.send(Message::Text(will_appear.to_string().into()))
+                .await
+                .unwrap();
+
+            let reply = ws.next().await.unwrap().unwrap();
+            let Message::Text(text) = reply else {
+                panic!("expected text")
+            };
+            let cmd: Value = serde_json::from_str(text.as_str()).unwrap();
+            let _ = ws.close(None).await;
+            cmd
+        });
+
+        let plugin = tokio::spawn(async move {
+            StreamDeck::from_args(plugin_args(port, &info))
+                .unwrap()
+                .register_action(NeoFeedbackAction)
+                .unwrap()
+                .connect()
+                .await
+        });
+
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server timed out")
+            .unwrap();
+        assert_eq!(cmd["event"], "setFeedback");
+        assert_eq!(cmd["context"], "context123");
+        assert_eq!(cmd["payload"]["title"], "2,0 cached");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
+    }
 }
