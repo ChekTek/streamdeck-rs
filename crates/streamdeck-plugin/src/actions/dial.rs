@@ -37,13 +37,12 @@ impl DialAction {
         true
     }
 
+    pub fn is_neo_infobar(&self) -> bool {
+        false
+    }
+
     pub fn context(&self) -> ActionContext {
-        ActionContext {
-            id: self.handle.id.clone(),
-            manifest_id: self.handle.manifest_id.clone(),
-            device: self.handle.device.clone(),
-            controller: self.handle.controller.clone(),
-        }
+        self.handle.context()
     }
 
     pub async fn set_settings<S: serde::Serialize>(&self, settings: S) -> Result<()> {
@@ -62,6 +61,7 @@ impl DialAction {
         self.handle.get_resources().await
     }
 
+    /// Show a temporary alert indicator on the touch strip.
     pub async fn show_alert(&self) -> Result<()> {
         self.handle.show_alert().await
     }
@@ -71,31 +71,11 @@ impl DialAction {
     }
 
     pub async fn set_feedback(&self, feedback: impl serde::Serialize) -> Result<()> {
-        let value = serde_json::to_value(feedback)?;
-        let serde_json::Value::Object(payload) = value else {
-            return Err(crate::error::Error::Message(
-                "set_feedback payload must be a JSON object".into(),
-            ));
-        };
-        self.handle
-            .runtime
-            .send(crate::protocol::PluginCommand::SetFeedback {
-                context: self.handle.id.clone(),
-                payload,
-            })
-            .await
+        self.handle.set_feedback_inner(feedback).await
     }
 
     pub async fn set_feedback_layout(&self, layout: impl Into<String>) -> Result<()> {
-        self.handle
-            .runtime
-            .send(crate::protocol::PluginCommand::SetFeedbackLayout {
-                context: self.handle.id.clone(),
-                payload: crate::protocol::SetFeedbackLayoutPayload {
-                    layout: layout.into(),
-                },
-            })
-            .await
+        self.handle.set_feedback_layout_inner(layout.into()).await
     }
 
     pub async fn set_image(&self, image: Option<impl Into<String>>) -> Result<()> {

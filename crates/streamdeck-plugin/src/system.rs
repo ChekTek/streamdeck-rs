@@ -1,8 +1,5 @@
 use std::sync::Arc;
 
-use serde::de::DeserializeOwned;
-use uuid::Uuid;
-
 use crate::error::Result;
 use crate::events::{
     ApplicationDidLaunchEvent, ApplicationDidTerminateEvent, DidReceiveDeepLinkEvent,
@@ -11,7 +8,7 @@ use crate::events::{
 use crate::listeners::{Subscription, subscribe};
 use crate::protocol::PluginCommand;
 use crate::runtime::Runtime;
-use crate::validation::{requires_sdk_version, requires_version};
+use crate::validation::requires_version;
 
 /// Interact with, and receive events from, the system the plugin is running on.
 #[derive(Clone)]
@@ -68,25 +65,5 @@ impl SystemApi {
                 payload: crate::protocol::OpenUrlPayload { url: url.into() },
             })
             .await
-    }
-
-    pub async fn get_secrets<T: DeserializeOwned>(&self) -> Result<T> {
-        requires_version(6, 9, &self.runtime.version, "Secrets", &self.runtime)?;
-        requires_sdk_version(&self.runtime, 3, "Secrets")?;
-        let ev = self
-            .runtime
-            .request(PluginCommand::GetSecrets {
-                context: self.runtime.plugin_uuid().to_string(),
-                id: Some(Uuid::new_v4().to_string()),
-            })
-            .await?;
-        match ev.as_ref() {
-            crate::protocol::PluginEvent::DidReceiveSecrets { payload, .. } => {
-                Ok(serde_json::from_value(payload.secrets.clone())?)
-            }
-            _ => Err(crate::error::Error::Message(
-                "unexpected secrets response".into(),
-            )),
-        }
     }
 }

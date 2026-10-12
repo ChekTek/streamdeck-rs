@@ -145,7 +145,7 @@ pub struct Runtime {
     pub action_store: ActionStore,
     pub device_store: DeviceStore,
     pub settings_cache: Mutex<HashMap<String, Value>>,
-    experimental_ids: AtomicBool,
+    legacy_settings_behavior: AtomicBool,
     pub(crate) registered: RwLock<Vec<Arc<dyn ErasedAction>>>,
     pub listeners: EventListeners,
     pub ui: UiState,
@@ -181,7 +181,7 @@ impl Runtime {
             action_store: ActionStore::default(),
             device_store: DeviceStore::default(),
             settings_cache: Mutex::new(HashMap::new()),
-            experimental_ids: AtomicBool::new(false),
+            legacy_settings_behavior: AtomicBool::new(false),
             registered: RwLock::new(Vec::new()),
             listeners: EventListeners::new(),
             ui: UiState::new(),
@@ -189,12 +189,39 @@ impl Runtime {
         })
     }
 
-    pub fn experimental_ids(&self) -> bool {
-        self.experimental_ids.load(Ordering::SeqCst)
+    /// When `false` (default), settings replies requested by the plugin (`id` set) do not
+    /// fire `didReceiveSettings` / `didReceiveGlobalSettings`, and action settings are
+    /// served from a cache. Requires Stream Deck 7.1.
+    pub fn legacy_settings_behavior(&self) -> bool {
+        self.legacy_settings_behavior.load(Ordering::SeqCst)
     }
 
-    pub fn set_experimental_ids(&self, value: bool) {
-        self.experimental_ids.store(value, Ordering::SeqCst);
+    pub fn set_legacy_settings_behavior(&self, value: bool) -> Result<()> {
+        let prev = self.legacy_settings_behavior.swap(value, Ordering::SeqCst);
+        if prev == value {
+            return Ok(());
+        }
+        if let Err(err) = self.validate_settings_behavior() {
+            self.legacy_settings_behavior.store(prev, Ordering::SeqCst);
+            return Err(err);
+        }
+        self.settings_cache.lock().expect("settings cache").clear();
+        Ok(())
+    }
+
+    /// The default (non-legacy) settings behavior relies on message identifiers, which
+    /// need Stream Deck 7.1 and `Software.MinimumVersion` 7.1.
+    pub fn validate_settings_behavior(&self) -> Result<()> {
+        if self.legacy_settings_behavior() {
+            return Ok(());
+        }
+        crate::validation::requires_version(
+            7,
+            1,
+            &self.version,
+            "Default onDidReceiveSettings/onDidReceiveGlobalSettings behavior",
+            self,
+        )
     }
 
     pub fn take_outgoing_rx(&self) -> Option<mpsc::UnboundedReceiver<String>> {
@@ -216,22 +243,19 @@ impl Runtime {
         let context = match &command {
             PluginCommand::GetSettings { context, .. }
             | PluginCommand::GetResources { context, .. }
-            | PluginCommand::GetGlobalSettings { context, .. }
-            | PluginCommand::GetSecrets { context, .. } => context.clone(),
+            | PluginCommand::GetGlobalSettings { context, .. } => context.clone(),
             _ => String::new(),
         };
         let kind = match &command {
             PluginCommand::GetSettings { .. } => "didReceiveSettings",
             PluginCommand::GetResources { .. } => "didReceiveResources",
             PluginCommand::GetGlobalSettings { .. } => "didReceiveGlobalSettings",
-            PluginCommand::GetSecrets { .. } => "didReceiveSecrets",
             _ => "",
         };
         let request_id = match &command {
             PluginCommand::GetSettings { id, .. }
             | PluginCommand::GetResources { id, .. }
-            | PluginCommand::GetGlobalSettings { id, .. }
-            | PluginCommand::GetSecrets { id, .. } => id.clone(),
+            | PluginCommand::GetGlobalSettings { id, .. } => id.clone(),
             _ => None,
         };
         let mut rx = self.events.subscribe();
@@ -282,9 +306,7 @@ fn matches_request(
         PluginEvent::DidReceiveSettings(m) | PluginEvent::DidReceiveResources(m) => {
             m.context == context
         }
-        PluginEvent::DidReceiveGlobalSettings { .. } | PluginEvent::DidReceiveSecrets { .. } => {
-            true
-        }
+        PluginEvent::DidReceiveGlobalSettings { .. } => true,
         _ => false,
     };
     if !context_ok {

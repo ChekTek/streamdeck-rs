@@ -39,20 +39,6 @@ pub fn requires_version(
     Ok(())
 }
 
-/// Validate manifest `SDKVersion`.
-pub fn requires_sdk_version(runtime: &Runtime, minimum: u32, feature: &str) -> Result<()> {
-    if let Some(actual) = runtime.manifest.as_ref().and_then(|m| m.sdk_version)
-        && minimum > actual
-    {
-        return Err(Error::SdkVersionNotSupported {
-            feature: feature.to_string(),
-            required: minimum,
-            actual,
-        });
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

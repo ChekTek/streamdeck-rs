@@ -22,7 +22,9 @@ mod ui;
 mod validation;
 mod version;
 
-pub use actions::{Action, ActionContext, ActionService, DialAction, KeyAction, SingletonAction};
+pub use actions::{
+    Action, ActionContext, ActionService, DialAction, KeyAction, NeoInfobarAction, SingletonAction,
+};
 pub use devices::{Device, DeviceService};
 pub use error::{Error, Result};
 pub use events::*;

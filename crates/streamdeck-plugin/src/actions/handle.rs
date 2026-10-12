@@ -12,6 +12,8 @@ use crate::protocol::{
 use crate::runtime::Runtime;
 use crate::validation::requires_version;
 
+use super::ActionContext;
+
 /// Shared identity + command sender for a visible action instance.
 #[derive(Clone)]
 pub struct ActionHandle {
@@ -38,7 +40,7 @@ impl ActionHandle {
     }
 
     pub async fn get_settings<S: DeserializeOwned>(&self) -> Result<S> {
-        if self.runtime.experimental_ids() {
+        if !self.runtime.legacy_settings_behavior() {
             let cache = self.runtime.settings_cache.lock().expect("settings cache");
             if let Some(cached) = cache.get(&self.id) {
                 self.runtime.logger.create_scope("Connection").trace(format!(
@@ -106,6 +108,29 @@ impl ActionHandle {
             .await
     }
 
+    pub(crate) async fn set_feedback_inner(&self, feedback: impl Serialize) -> Result<()> {
+        let serde_json::Value::Object(payload) = serde_json::to_value(feedback)? else {
+            return Err(Error::Message(
+                "set_feedback payload must be a JSON object".into(),
+            ));
+        };
+        self.runtime
+            .send(PluginCommand::SetFeedback {
+                context: self.id.clone(),
+                payload,
+            })
+            .await
+    }
+
+    pub(crate) async fn set_feedback_layout_inner(&self, layout: String) -> Result<()> {
+        self.runtime
+            .send(PluginCommand::SetFeedbackLayout {
+                context: self.id.clone(),
+                payload: crate::protocol::SetFeedbackLayoutPayload { layout },
+            })
+            .await
+    }
+
     pub(crate) async fn set_title_inner(
         &self,
         title: Option<String>,
@@ -153,13 +178,12 @@ impl ActionHandle {
             .await
     }
 
-    #[allow(dead_code)]
-    pub fn is_dial(&self) -> bool {
-        self.controller == Controller::Encoder
-    }
-
-    #[allow(dead_code)]
-    pub fn is_key(&self) -> bool {
-        self.controller == Controller::Keypad
+    pub(crate) fn context(&self) -> ActionContext {
+        ActionContext {
+            id: self.id.clone(),
+            manifest_id: self.manifest_id.clone(),
+            device: self.device.clone(),
+            controller: self.controller.clone(),
+        }
     }
 }

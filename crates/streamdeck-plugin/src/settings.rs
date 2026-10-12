@@ -10,7 +10,6 @@ use crate::events::DidReceiveGlobalSettingsEvent;
 use crate::listeners::{Subscription, subscribe};
 use crate::protocol::PluginCommand;
 use crate::runtime::Runtime;
-use crate::validation::requires_version;
 
 /// Persist global and action settings within Stream Deck.
 #[derive(Clone)]
@@ -19,20 +18,23 @@ pub struct SettingsApi {
 }
 
 impl SettingsApi {
-    pub fn use_experimental_message_identifiers(&self) -> bool {
-        self.runtime.experimental_ids()
+    /// Whether `on_did_receive_settings` / `on_did_receive_global_settings` also fire after
+    /// `get_settings()` / `get_global_settings()`.
+    ///
+    /// - `false` (default): they only fire when settings change in the property inspector.
+    ///   Requires Stream Deck 7.1 and `Software.MinimumVersion` 7.1.
+    /// - `true`: they also fire for replies to `get_settings()` / `get_global_settings()`.
+    ///
+    /// Replaces `use_experimental_message_identifiers`, with inverted meaning.
+    pub fn use_legacy_settings_behavior(&self) -> bool {
+        self.runtime.legacy_settings_behavior()
     }
 
-    pub fn set_use_experimental_message_identifiers(&self, value: bool) -> Result<()> {
-        requires_version(
-            7,
-            1,
-            &self.runtime.version,
-            "Message identifiers",
-            &self.runtime,
-        )?;
-        self.runtime.set_experimental_ids(value);
-        Ok(())
+    /// Set [`Self::use_legacy_settings_behavior`]. Clears the action settings cache.
+    /// Fails, leaving the value unchanged, when switching to the default behavior on a
+    /// Stream Deck (or manifest minimum) older than 7.1.
+    pub fn set_use_legacy_settings_behavior(&self, value: bool) -> Result<()> {
+        self.runtime.set_legacy_settings_behavior(value)
     }
 
     pub async fn get_global_settings<T: DeserializeOwned>(&self) -> Result<T> {
@@ -62,6 +64,8 @@ impl SettingsApi {
             .await
     }
 
+    /// Fires when global settings change in the property inspector (and, with legacy
+    /// settings behavior, after `get_global_settings()`).
     pub fn on_did_receive_global_settings<F, Fut>(&self, listener: F) -> Subscription
     where
         F: Fn(DidReceiveGlobalSettingsEvent<Value>) -> Fut + Send + Sync + 'static,
@@ -73,6 +77,8 @@ impl SettingsApi {
         )
     }
 
+    /// Fires when action settings change in the property inspector (and, with legacy
+    /// settings behavior, after `get_settings()`).
     pub fn on_did_receive_settings<F, Fut>(&self, listener: F) -> Subscription
     where
         F: Fn(crate::events::DidReceiveSettingsEvent<Value>) -> Fut + Send + Sync + 'static,

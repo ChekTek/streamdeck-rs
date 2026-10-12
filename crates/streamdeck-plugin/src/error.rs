@@ -34,15 +34,6 @@ pub enum Error {
         current: String,
     },
 
-    #[error(
-        "[ERR_NOT_SUPPORTED]: {feature} requires manifest SDK version {required} or higher, but found version {actual}; please update the \"SDKVersion\" in the plugin's manifest to {required} or higher."
-    )]
-    SdkVersionNotSupported {
-        feature: String,
-        required: u32,
-        actual: u32,
-    },
-
     #[error("The action's UUID cannot be empty.")]
     MissingActionUuid,
 

@@ -6,7 +6,9 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::actions::{Action, ActionContext, ActionHandle, DialAction, KeyAction};
+use crate::actions::{
+    Action, ActionContext, ActionHandle, DialAction, KeyAction, NeoInfobarAction,
+};
 use crate::devices::Device;
 use crate::error::{Error, Result};
 use crate::events::*;
@@ -19,6 +21,10 @@ use crate::runtime::Runtime;
 
 /// Connect, register, and run until the WebSocket closes.
 pub async fn run(runtime: Arc<Runtime>) -> Result<()> {
+    if let Err(err) = runtime.validate_settings_behavior() {
+        runtime.logger.error(err.to_string());
+        return Err(err);
+    }
     let reader = start(runtime).await?;
     reader
         .await
@@ -275,7 +281,6 @@ async fn dispatch(runtime: &Arc<Runtime>, event: PluginEvent) {
                 .emit(SystemDidWakeUpEvent)
                 .await;
         }
-        PluginEvent::DidReceiveSecrets { .. } => {}
         PluginEvent::Unknown(raw) => {
             let logged = redact_for_log(&raw.to_string());
             runtime
@@ -326,6 +331,13 @@ fn action_from_appear(
                 .ok_or_else(|| Error::Message("encoder willAppear missing coordinates".into()))?;
             Ok(Action::Dial(DialAction::new(handle, coords)))
         }
+        Controller::Neo => {
+            let coords = msg
+                .payload
+                .coordinates
+                .ok_or_else(|| Error::Message("Neo willAppear missing coordinates".into()))?;
+            Ok(Action::NeoInfobar(NeoInfobarAction::new(handle, coords)))
+        }
         Controller::Unknown(name) => {
             runtime.logger.warn(format!(
                 "unknown controller `{name}` for action {}",
@@ -355,7 +367,7 @@ async fn on_will_appear(runtime: &Arc<Runtime>, msg: ActionMessage<AppearPayload
             return;
         }
     };
-    if runtime.experimental_ids() {
+    if !runtime.legacy_settings_behavior() {
         runtime
             .settings_cache
             .lock()
@@ -540,7 +552,9 @@ async fn on_did_receive_settings(
     runtime: &Arc<Runtime>,
     msg: crate::protocol::ActionMessageWithId<AppearPayload>,
 ) {
-    if runtime.experimental_ids() {
+    // Replies to `get_settings()` carry the request `id`; by default they only update the
+    // cache and are not surfaced as `didReceiveSettings`.
+    if !runtime.legacy_settings_behavior() {
         runtime
             .settings_cache
             .lock()
@@ -586,7 +600,7 @@ async fn on_did_receive_resources(
 }
 
 async fn on_global_settings(runtime: &Arc<Runtime>, id: Option<String>, settings: Value) {
-    if runtime.experimental_ids() && id.is_some() {
+    if !runtime.legacy_settings_behavior() && id.is_some() {
         return;
     }
     runtime
@@ -889,7 +903,7 @@ mod tests {
         });
 
         let plugin = tokio::spawn(async move {
-            StreamDeck::from_args([
+            let plugin = StreamDeck::from_args([
                 "-port",
                 &port.to_string(),
                 "-pluginUUID",
@@ -899,11 +913,17 @@ mod tests {
                 "-info",
                 &info,
             ])
-            .unwrap()
-            .register_action(FetchSettingsAction)
-            .unwrap()
-            .connect()
-            .await
+            .unwrap();
+            // Bypass the settings cache so `get_settings` round-trips to Stream Deck.
+            plugin
+                .settings()
+                .set_use_legacy_settings_behavior(true)
+                .unwrap();
+            plugin
+                .register_action(FetchSettingsAction)
+                .unwrap()
+                .connect()
+                .await
         });
 
         let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), server)
