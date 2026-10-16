@@ -36,10 +36,6 @@ pub enum PluginEvent {
         id: Option<String>,
         payload: SettingsOnlyPayload,
     },
-    DidReceiveSecrets {
-        id: Option<String>,
-        payload: SecretsPayload,
-    },
     DidReceiveSettings(ActionMessageWithId<AppearPayload>),
     DidReceiveResources(ActionMessageWithId<AppearPayload>),
     KeyDown(ActionMessage<KeyGesturePayload>),
@@ -96,12 +92,6 @@ enum KnownPluginEvent {
         #[serde(default)]
         id: Option<String>,
         payload: SettingsOnlyPayload,
-    },
-    #[serde(rename = "didReceiveSecrets")]
-    DidReceiveSecrets {
-        #[serde(default)]
-        id: Option<String>,
-        payload: SecretsPayload,
     },
     #[serde(rename = "didReceiveSettings")]
     DidReceiveSettings(ActionMessageWithId<AppearPayload>),
@@ -168,9 +158,6 @@ impl From<KnownPluginEvent> for PluginEvent {
             KnownPluginEvent::DidReceiveGlobalSettings { id, payload } => {
                 Self::DidReceiveGlobalSettings { id, payload }
             }
-            KnownPluginEvent::DidReceiveSecrets { id, payload } => {
-                Self::DidReceiveSecrets { id, payload }
-            }
             KnownPluginEvent::DidReceiveSettings(m) => Self::DidReceiveSettings(m),
             KnownPluginEvent::DidReceiveResources(m) => Self::DidReceiveResources(m),
             KnownPluginEvent::KeyDown(m) => Self::KeyDown(m),
@@ -227,7 +214,6 @@ fn is_known_plugin_event(name: &str) -> bool {
             | "dialRotate"
             | "didReceiveDeepLink"
             | "didReceiveGlobalSettings"
-            | "didReceiveSecrets"
             | "didReceiveSettings"
             | "didReceiveResources"
             | "keyDown"
@@ -256,7 +242,6 @@ impl PluginEvent {
             Self::DialRotate(_) => "dialRotate",
             Self::DidReceiveDeepLink { .. } => "didReceiveDeepLink",
             Self::DidReceiveGlobalSettings { .. } => "didReceiveGlobalSettings",
-            Self::DidReceiveSecrets { .. } => "didReceiveSecrets",
             Self::DidReceiveSettings(_) => "didReceiveSettings",
             Self::DidReceiveResources(_) => "didReceiveResources",
             Self::KeyDown(_) => "keyDown",
@@ -278,9 +263,7 @@ impl PluginEvent {
 
     pub fn response_id(&self) -> Option<&str> {
         match self {
-            Self::DidReceiveGlobalSettings { id, .. } | Self::DidReceiveSecrets { id, .. } => {
-                id.as_deref()
-            }
+            Self::DidReceiveGlobalSettings { id, .. } => id.as_deref(),
             Self::DidReceiveSettings(m) | Self::DidReceiveResources(m) => m.id.as_deref(),
             _ => None,
         }
@@ -356,11 +339,6 @@ pub struct DeepLinkPayload {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SettingsOnlyPayload {
     pub settings: Value,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SecretsPayload {
-    pub secrets: Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]

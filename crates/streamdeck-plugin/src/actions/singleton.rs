@@ -56,6 +56,9 @@ pub trait SingletonAction: Send + Sync + 'static {
         }
     }
 
+    /// Fires when settings change in the property inspector. With
+    /// [`SettingsApi::set_use_legacy_settings_behavior`](crate::SettingsApi::set_use_legacy_settings_behavior)
+    /// enabled, also fires after `get_settings()`.
     fn on_did_receive_settings(
         &self,
         ev: DidReceiveSettingsEvent<Self::Settings>,

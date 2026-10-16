@@ -11,7 +11,7 @@
     "CodePathWin": "bin/increment-counter.exe",
     "SDKVersion": 2,
     "Software": {
-        "MinimumVersion": "6.6"
+        "MinimumVersion": "7.1"
     },
     "OS": [
         {

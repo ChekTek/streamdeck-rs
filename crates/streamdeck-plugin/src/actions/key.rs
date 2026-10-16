@@ -42,13 +42,12 @@ impl KeyAction {
         false
     }
 
+    pub fn is_neo_infobar(&self) -> bool {
+        false
+    }
+
     pub fn context(&self) -> ActionContext {
-        ActionContext {
-            id: self.handle.id.clone(),
-            manifest_id: self.handle.manifest_id.clone(),
-            device: self.handle.device.clone(),
-            controller: self.handle.controller.clone(),
-        }
+        self.handle.context()
     }
 
     pub async fn set_settings<S: serde::Serialize>(&self, settings: S) -> Result<()> {
@@ -67,6 +66,7 @@ impl KeyAction {
         self.handle.get_resources().await
     }
 
+    /// Show a temporary alert (yellow triangle) on the key.
     pub async fn show_alert(&self) -> Result<()> {
         self.handle.show_alert().await
     }

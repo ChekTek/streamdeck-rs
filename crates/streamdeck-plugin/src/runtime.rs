@@ -145,7 +145,7 @@ pub struct Runtime {
     pub action_store: ActionStore,
     pub device_store: DeviceStore,
     pub settings_cache: Mutex<HashMap<String, Value>>,
-    experimental_ids: AtomicBool,
+    legacy_settings_behavior: AtomicBool,
     pub(crate) registered: RwLock<Vec<Arc<dyn ErasedAction>>>,
     pub listeners: EventListeners,
     pub ui: UiState,
@@ -181,7 +181,7 @@ impl Runtime {
             action_store: ActionStore::default(),
             device_store: DeviceStore::default(),
             settings_cache: Mutex::new(HashMap::new()),
-            experimental_ids: AtomicBool::new(false),
+            legacy_settings_behavior: AtomicBool::new(false),
             registered: RwLock::new(Vec::new()),
             listeners: EventListeners::new(),
             ui: UiState::new(),
@@ -189,12 +189,42 @@ impl Runtime {
         })
     }
 
-    pub fn experimental_ids(&self) -> bool {
-        self.experimental_ids.load(Ordering::SeqCst)
+    /// When `false` (default), settings replies requested by the plugin (`id` set) do not
+    /// fire `didReceiveSettings` / `didReceiveGlobalSettings`, and action settings are
+    /// served from a cache. Requires Stream Deck 7.1.
+    pub fn legacy_settings_behavior(&self) -> bool {
+        self.legacy_settings_behavior.load(Ordering::SeqCst)
     }
 
-    pub fn set_experimental_ids(&self, value: bool) {
-        self.experimental_ids.store(value, Ordering::SeqCst);
+    pub fn set_legacy_settings_behavior(&self, value: bool) -> Result<()> {
+        // Re-applying the current mode is a no-op, even on versions that could not switch to it.
+        if self.legacy_settings_behavior() == value {
+            return Ok(());
+        }
+        // Validate before publishing so other threads never observe an unsupported mode.
+        self.validate_settings_behavior_for(value)?;
+        self.legacy_settings_behavior.store(value, Ordering::SeqCst);
+        self.settings_cache.lock().expect("settings cache").clear();
+        Ok(())
+    }
+
+    /// The default (non-legacy) settings behavior relies on message identifiers, which
+    /// need Stream Deck 7.1 and `Software.MinimumVersion` 7.1.
+    pub fn validate_settings_behavior(&self) -> Result<()> {
+        self.validate_settings_behavior_for(self.legacy_settings_behavior())
+    }
+
+    fn validate_settings_behavior_for(&self, legacy: bool) -> Result<()> {
+        if legacy {
+            return Ok(());
+        }
+        crate::validation::requires_version(
+            7,
+            1,
+            &self.version,
+            "Default onDidReceiveSettings/onDidReceiveGlobalSettings behavior",
+            self,
+        )
     }
 
     pub fn take_outgoing_rx(&self) -> Option<mpsc::UnboundedReceiver<String>> {
@@ -216,22 +246,19 @@ impl Runtime {
         let context = match &command {
             PluginCommand::GetSettings { context, .. }
             | PluginCommand::GetResources { context, .. }
-            | PluginCommand::GetGlobalSettings { context, .. }
-            | PluginCommand::GetSecrets { context, .. } => context.clone(),
+            | PluginCommand::GetGlobalSettings { context, .. } => context.clone(),
             _ => String::new(),
         };
         let kind = match &command {
             PluginCommand::GetSettings { .. } => "didReceiveSettings",
             PluginCommand::GetResources { .. } => "didReceiveResources",
             PluginCommand::GetGlobalSettings { .. } => "didReceiveGlobalSettings",
-            PluginCommand::GetSecrets { .. } => "didReceiveSecrets",
             _ => "",
         };
         let request_id = match &command {
             PluginCommand::GetSettings { id, .. }
             | PluginCommand::GetResources { id, .. }
-            | PluginCommand::GetGlobalSettings { id, .. }
-            | PluginCommand::GetSecrets { id, .. } => id.clone(),
+            | PluginCommand::GetGlobalSettings { id, .. } => id.clone(),
             _ => None,
         };
         let mut rx = self.events.subscribe();
@@ -282,9 +309,7 @@ fn matches_request(
         PluginEvent::DidReceiveSettings(m) | PluginEvent::DidReceiveResources(m) => {
             m.context == context
         }
-        PluginEvent::DidReceiveGlobalSettings { .. } | PluginEvent::DidReceiveSecrets { .. } => {
-            true
-        }
+        PluginEvent::DidReceiveGlobalSettings { .. } => true,
         _ => false,
     };
     if !context_ok {
@@ -383,5 +408,55 @@ mod tests {
             "plugin",
             Some("req-a")
         ));
+    }
+
+    fn runtime_with_version(version: &str) -> Arc<Runtime> {
+        let info = serde_json::from_value(json!({
+            "application": { "version": version },
+            "plugin": { "uuid": "x", "version": "1" }
+        }))
+        .unwrap();
+        Runtime::new(RegistrationParameters {
+            port: "1".into(),
+            plugin_uuid: "u".into(),
+            register_event: "registerPlugin".into(),
+            info,
+        })
+    }
+
+    fn cache_settings(rt: &Runtime) {
+        rt.settings_cache
+            .lock()
+            .unwrap()
+            .insert("ctx".into(), json!({}));
+    }
+
+    #[test]
+    fn toggling_settings_behavior_clears_cache() {
+        let rt = runtime_with_version("7.1");
+        cache_settings(&rt);
+        rt.set_legacy_settings_behavior(true).unwrap();
+        assert!(rt.legacy_settings_behavior());
+        assert!(rt.settings_cache.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unchanged_settings_behavior_is_noop() {
+        // Default mode is not supported on 7.0, but re-applying it must not fail.
+        let rt = runtime_with_version("7.0");
+        cache_settings(&rt);
+        rt.set_legacy_settings_behavior(false).unwrap();
+        assert!(!rt.legacy_settings_behavior());
+        assert_eq!(rt.settings_cache.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn failed_settings_behavior_toggle_keeps_mode_and_cache() {
+        let rt = runtime_with_version("7.0");
+        rt.set_legacy_settings_behavior(true).unwrap();
+        cache_settings(&rt);
+        assert!(rt.set_legacy_settings_behavior(false).is_err());
+        assert!(rt.legacy_settings_behavior());
+        assert_eq!(rt.settings_cache.lock().unwrap().len(), 1);
     }
 }

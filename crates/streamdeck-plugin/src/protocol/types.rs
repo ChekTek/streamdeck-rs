@@ -96,6 +96,8 @@ pub enum Target {
 pub enum Controller {
     Keypad,
     Encoder,
+    /// Infobar on Stream Deck Neo (Stream Deck 7.6+).
+    Neo,
     Unknown(String),
 }
 
@@ -104,6 +106,7 @@ impl Controller {
         match value {
             "Keypad" => Self::Keypad,
             "Encoder" => Self::Encoder,
+            "Neo" => Self::Neo,
             other => Self::Unknown(other.to_string()),
         }
     }
@@ -112,6 +115,7 @@ impl Controller {
         match self {
             Self::Keypad => "Keypad",
             Self::Encoder => "Encoder",
+            Self::Neo => "Neo",
             Self::Unknown(value) => value,
         }
     }
@@ -419,6 +423,11 @@ mod tests {
             serde_json::from_value::<Controller>(json!("Keypad")).unwrap(),
             Controller::Keypad
         );
+        assert_eq!(
+            serde_json::from_value::<Controller>(json!("Neo")).unwrap(),
+            Controller::Neo
+        );
+        assert_eq!(serde_json::to_value(Controller::Neo).unwrap(), json!("Neo"));
     }
 
     #[test]

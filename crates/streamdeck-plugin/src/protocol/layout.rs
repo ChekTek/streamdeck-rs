@@ -50,7 +50,7 @@ impl<'de> Deserialize<'de> for BarSubType {
     }
 }
 
-/// Payload object used to update a Stream Deck encoder layout.
+/// Payload object used to update a layout on a dial (Stream Deck +) or infobar (Stream Deck Neo).
 ///
 /// Keys are layout item identifiers; values may be a string, number, or a partial
 /// item definition (`Bar`, `GBar`, `Pixmap`, `Text`).
@@ -98,6 +98,10 @@ pub struct Pixmap {
     pub background: Option<String>,
 }
 
+/// Layout item used to render text.
+///
+/// On Stream Deck + and Stream Deck + XL, a text item with the key `title` lets users
+/// change its appearance and value within Stream Deck.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Text {
     #[serde(skip_serializing_if = "Option::is_none")]

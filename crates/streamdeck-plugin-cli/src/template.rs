@@ -258,7 +258,7 @@ mod tests {
 
         let main = std::fs::read_to_string(dest.join("src/main.rs")).unwrap();
         assert!(main.contains("streamdeck::block_on"));
-        assert!(main.contains("set_use_experimental_message_identifiers"));
+        assert!(main.contains("register_action(IncrementCounter)"));
 
         let manifest: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(plugin.join("manifest.json")).unwrap())

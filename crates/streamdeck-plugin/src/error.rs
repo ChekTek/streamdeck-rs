@@ -35,12 +35,12 @@ pub enum Error {
     },
 
     #[error(
-        "[ERR_NOT_SUPPORTED]: {feature} requires manifest SDK version {required} or higher, but found version {actual}; please update the \"SDKVersion\" in the plugin's manifest to {required} or higher."
+        "[ERR_NOT_SUPPORTED]: {feature} requires Stream Deck version {required} or higher; please update the \"Software.MinimumVersion\" in the plugin's manifest from \"{manifest_minimum}\" to \"{required}\" or higher."
     )]
-    SdkVersionNotSupported {
+    ManifestMinimumVersionNotSupported {
         feature: String,
-        required: u32,
-        actual: u32,
+        required: String,
+        manifest_minimum: String,
     },
 
     #[error("The action's UUID cannot be empty.")]
