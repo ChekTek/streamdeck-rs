@@ -60,6 +60,15 @@ impl ActionHandle {
             .await?;
         match value.as_ref() {
             PluginEvent::DidReceiveSettings(m) => {
+                // Cache before returning so a following `set_settings()` is never undone by a
+                // late cache write from the event dispatcher.
+                if !self.runtime.legacy_settings_behavior() {
+                    self.runtime
+                        .settings_cache
+                        .lock()
+                        .expect("settings cache")
+                        .insert(self.id.clone(), m.payload.settings.clone());
+                }
                 Ok(serde_json::from_value(m.payload.settings.clone())?)
             }
             _ => Err(Error::Message("unexpected settings response".into())),

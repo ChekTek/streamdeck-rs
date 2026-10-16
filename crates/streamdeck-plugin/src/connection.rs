@@ -552,17 +552,19 @@ async fn on_did_receive_settings(
     runtime: &Arc<Runtime>,
     msg: crate::protocol::ActionMessageWithId<AppearPayload>,
 ) {
-    // Replies to `get_settings()` carry the request `id`; by default they only update the
-    // cache and are not surfaced as `didReceiveSettings`.
+    // Replies to `get_settings()` carry the request `id`. They are cached by the request
+    // path before `get_settings()` returns, so skip them here: this handler runs after the
+    // reply is broadcast to the waiter and could otherwise reinsert a value that a
+    // `set_settings()` call has since cleared. Unsolicited updates (no `id`) update the cache.
     if !runtime.legacy_settings_behavior() {
+        if msg.id.is_some() {
+            return;
+        }
         runtime
             .settings_cache
             .lock()
             .expect("cache")
             .insert(msg.context.clone(), msg.payload.settings.clone());
-        if msg.id.is_some() {
-            return;
-        }
     }
     let Some(action) = runtime.action_store.get(&msg.context) else {
         return;
@@ -1358,6 +1360,169 @@ mod tests {
         assert_eq!(cmd["event"], "setFeedback");
         assert_eq!(cmd["context"], "context123");
         assert_eq!(cmd["payload"]["title"], "2,0 cached");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
+    }
+
+    fn settings_message(
+        id: Option<&str>,
+        settings: Value,
+    ) -> crate::protocol::ActionMessageWithId<AppearPayload> {
+        serde_json::from_value(json!({
+            "action": "com.elgato.test.one",
+            "context": "context123",
+            "device": "device123",
+            "id": id,
+            "payload": {
+                "controller": "Keypad",
+                "coordinates": { "column": 1, "row": 2 },
+                "isInMultiAction": false,
+                "resources": {},
+                "settings": settings
+            }
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn did_receive_settings_handler_caches_only_unsolicited_updates() {
+        let info = serde_json::from_value(json!({
+            "application": { "version": "7.1.0" },
+            "plugin": { "uuid": "x", "version": "1" }
+        }))
+        .unwrap();
+        let runtime = Runtime::new(crate::registration::RegistrationParameters {
+            port: "1".into(),
+            plugin_uuid: "u".into(),
+            register_event: "registerPlugin".into(),
+            info,
+        });
+
+        // A reply to `get_settings()` (has `id`) must not touch the cache: the request path
+        // already cached it, and the caller may have called `set_settings()` since.
+        on_did_receive_settings(
+            &runtime,
+            settings_message(Some("req-1"), json!({ "stale": true })),
+        )
+        .await;
+        assert!(runtime.settings_cache.lock().unwrap().is_empty());
+
+        // An unsolicited update (no `id`, e.g. from the property inspector) is cached.
+        on_did_receive_settings(&runtime, settings_message(None, json!({ "fresh": true }))).await;
+        assert_eq!(
+            runtime.settings_cache.lock().unwrap().get("context123"),
+            Some(&json!({ "fresh": true }))
+        );
+    }
+
+    struct ReadAfterWriteAction;
+
+    impl SingletonAction for ReadAfterWriteAction {
+        const UUID: &'static str = "com.elgato.test.one";
+        type Settings = Value;
+
+        async fn on_key_down(&self, ev: KeyDownEvent<Self::Settings>) {
+            // `set_settings` clears the cache, so the next read round-trips to Stream Deck.
+            ev.action
+                .set_settings(json!({ "label": "local" }))
+                .await
+                .expect("set settings");
+            let first = ev.action.get_settings::<Value>().await.expect("first read");
+            assert_eq!(first["label"], "from-sd");
+            // The reply must now be cached: the server fails the test on a second request.
+            let second = ev
+                .action
+                .get_settings::<Value>()
+                .await
+                .expect("second read");
+            assert_eq!(second["label"], "from-sd");
+            let _ = ev.action.set_title("cached").await;
+        }
+    }
+
+    #[tokio::test]
+    async fn get_settings_caches_reply_on_request_path() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let info = info_json();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let _registration = ws.next().await.unwrap().unwrap();
+
+            for event in ["willAppear", "keyDown"] {
+                let msg = json!({
+                    "event": event,
+                    "action": "com.elgato.test.one",
+                    "context": "context123",
+                    "device": "device123",
+                    "payload": {
+                        "controller": "Keypad",
+                        "coordinates": { "column": 1, "row": 2 },
+                        "isInMultiAction": false,
+                        "resources": {},
+                        "settings": {}
+                    }
+                });
+                ws.send(Message::Text(msg.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+
+            let mut get_settings_count = 0;
+            loop {
+                let msg = ws.next().await.unwrap().unwrap();
+                let Message::Text(text) = msg else {
+                    panic!("expected text")
+                };
+                let cmd: Value = serde_json::from_str(text.as_str()).unwrap();
+                match cmd["event"].as_str() {
+                    Some("setSettings") => {}
+                    Some("getSettings") => {
+                        get_settings_count += 1;
+                        assert_eq!(get_settings_count, 1, "second read should hit the cache");
+                        let reply = json!({
+                            "event": "didReceiveSettings",
+                            "action": "com.elgato.test.one",
+                            "context": "context123",
+                            "device": "device123",
+                            "id": cmd.get("id").cloned(),
+                            "payload": {
+                                "controller": "Keypad",
+                                "coordinates": { "column": 1, "row": 2 },
+                                "isInMultiAction": false,
+                                "resources": {},
+                                "settings": { "label": "from-sd" }
+                            }
+                        });
+                        ws.send(Message::Text(reply.to_string().into()))
+                            .await
+                            .unwrap();
+                    }
+                    Some("setTitle") => {
+                        let _ = ws.close(None).await;
+                        break cmd;
+                    }
+                    other => panic!("unexpected event {other:?}"),
+                }
+            }
+        });
+
+        let plugin = tokio::spawn(async move {
+            StreamDeck::from_args(plugin_args(port, &info))
+                .unwrap()
+                .register_action(ReadAfterWriteAction)
+                .unwrap()
+                .connect()
+                .await
+        });
+
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server timed out")
+            .unwrap();
+        assert_eq!(cmd["event"], "setTitle");
+        assert_eq!(cmd["payload"]["title"], "cached");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
     }
 }

@@ -197,12 +197,14 @@ impl Runtime {
     }
 
     pub fn set_legacy_settings_behavior(&self, value: bool) -> Result<()> {
+        // Re-applying the current mode is a no-op, even on versions that could not switch to it.
+        if self.legacy_settings_behavior() == value {
+            return Ok(());
+        }
         // Validate before publishing so other threads never observe an unsupported mode.
         self.validate_settings_behavior_for(value)?;
-        let prev = self.legacy_settings_behavior.swap(value, Ordering::SeqCst);
-        if prev != value {
-            self.settings_cache.lock().expect("settings cache").clear();
-        }
+        self.legacy_settings_behavior.store(value, Ordering::SeqCst);
+        self.settings_cache.lock().expect("settings cache").clear();
         Ok(())
     }
 
@@ -436,6 +438,16 @@ mod tests {
         rt.set_legacy_settings_behavior(true).unwrap();
         assert!(rt.legacy_settings_behavior());
         assert!(rt.settings_cache.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unchanged_settings_behavior_is_noop() {
+        // Default mode is not supported on 7.0, but re-applying it must not fail.
+        let rt = runtime_with_version("7.0");
+        cache_settings(&rt);
+        rt.set_legacy_settings_behavior(false).unwrap();
+        assert!(!rt.legacy_settings_behavior());
+        assert_eq!(rt.settings_cache.lock().unwrap().len(), 1);
     }
 
     #[test]

@@ -30,7 +30,8 @@ impl SettingsApi {
         self.runtime.legacy_settings_behavior()
     }
 
-    /// Set [`Self::use_legacy_settings_behavior`]. Clears the action settings cache.
+    /// Set [`Self::use_legacy_settings_behavior`]. Clears the action settings cache when
+    /// the mode changes; re-applying the current mode is a no-op.
     /// Fails, leaving the value unchanged, when switching to the default behavior on a
     /// Stream Deck (or manifest minimum) older than 7.1.
     pub fn set_use_legacy_settings_behavior(&self, value: bool) -> Result<()> {
