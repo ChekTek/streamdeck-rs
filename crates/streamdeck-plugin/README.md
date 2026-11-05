@@ -13,7 +13,7 @@ streamdeck-plugin = { path = "../streamdeck-plugin" }
 use streamdeck::{KeyDownEvent, SingletonAction, StreamDeck};
 ```
 
-This crate clones the application layer of Elgato’s [`@elgato/streamdeck`](https://github.com/elgatosf/streamdeck/tree/main/packages/plugin) package (3.0). Stream Deck launches your plugin as a long-running process, passes WebSocket registration arguments, and this SDK talks JSON over `ws://127.0.0.1:{port}`.
+This crate clones the application layer of Elgato’s [`@elgato/streamdeck`](https://github.com/elgatosf/streamdeck/tree/main/packages/plugin) package (3.0.4). Stream Deck launches your plugin as a long-running process, passes WebSocket registration arguments, and this SDK talks JSON over `ws://127.0.0.1:{port}`.
 
 It does **not** talk HID to the hardware. That is the Stream Deck app’s job. Scaffolding, linking, and packing live in [`streamdeck-plugin-cli`](../streamdeck-plugin-cli) (`cargo run -p streamdeck-plugin-cli`).
 
@@ -120,7 +120,7 @@ This replaces `set_use_experimental_message_identifiers`, with the opposite mean
 
 ## Feature version gates
 
-Some APIs require a minimum Stream Deck version, matching `@elgato/streamdeck` 3.0:
+Some APIs require a minimum Stream Deck version, matching `@elgato/streamdeck` 3.0.4:
 
 - Deep links and profile pages: 6.5
 - `deviceDidChange`: 7.0

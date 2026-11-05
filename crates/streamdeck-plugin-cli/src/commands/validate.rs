@@ -10,36 +10,51 @@ use crate::stream_deck::{is_valid_plugin_id, plugin_id_from_path, require_suppor
 pub fn run(path: Option<PathBuf>) -> Result<()> {
     require_supported_host()?;
     let project = resolve_project(path)?;
-    let errors = validate_plugin(&project.plugin_dir)?;
-    if errors.is_empty() {
+    let report = validate_plugin(&project.plugin_dir)?;
+    for warning in &report.warnings {
+        println!("{}", warning.yellow());
+    }
+    if report.errors.is_empty() {
         println!("{}", "Validation successful".green());
         Ok(())
     } else {
-        for error in &errors {
+        for error in &report.errors {
             println!("{}", error.red());
         }
-        bail!("validation failed with {} error(s)", errors.len());
+        bail!("validation failed with {} error(s)", report.errors.len());
     }
 }
 
-pub fn validate_plugin(plugin_dir: &Path) -> Result<Vec<String>> {
+/// Validation outcome. Only `errors` fail validation; `warnings` are advisory.
+#[derive(Debug)]
+pub struct Report {
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Stream Deck version that introduced the Neo infobar (`"Neo"` controller).
+const NEO_MINIMUM_VERSION: (u32, u32) = (7, 6);
+
+pub fn validate_plugin(plugin_dir: &Path) -> Result<Report> {
     validate_plugin_inner(plugin_dir, false)
 }
 
-pub fn validate_plugin_for_pack(plugin_dir: &Path) -> Result<Vec<String>> {
+pub fn validate_plugin_for_pack(plugin_dir: &Path) -> Result<Report> {
     validate_plugin_inner(plugin_dir, true)
 }
 
-fn validate_plugin_inner(plugin_dir: &Path, require_all_os: bool) -> Result<Vec<String>> {
+fn validate_plugin_inner(plugin_dir: &Path, require_all_os: bool) -> Result<Report> {
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
     let Some(uuid) = plugin_id_from_path(plugin_dir) else {
         errors.push(format!(
             "directory name must end with .sdPlugin: {}",
             plugin_dir.display()
         ));
-        return Ok(errors);
+        return Ok(Report { errors, warnings });
     };
-    if !is_valid_plugin_id(&uuid) {
+    let has_valid_id = is_valid_plugin_id(&uuid);
+    if !has_valid_id {
         errors.push(format!(
             "invalid plugin UUID derived from folder name: {uuid}"
         ));
@@ -48,7 +63,7 @@ fn validate_plugin_inner(plugin_dir: &Path, require_all_os: bool) -> Result<Vec<
     let manifest_path = plugin_dir.join("manifest.json");
     if !manifest_path.is_file() {
         errors.push("manifest.json is missing".into());
-        return Ok(errors);
+        return Ok(Report { errors, warnings });
     }
 
     let raw = std::fs::read_to_string(&manifest_path).context("failed to read manifest.json")?;
@@ -56,7 +71,7 @@ fn validate_plugin_inner(plugin_dir: &Path, require_all_os: bool) -> Result<Vec<
         Ok(value) => value,
         Err(err) => {
             errors.push(format!("manifest.json is not valid JSON: {err}"));
-            return Ok(errors);
+            return Ok(Report { errors, warnings });
         }
     };
 
@@ -80,8 +95,37 @@ fn validate_plugin_inner(plugin_dir: &Path, require_all_os: bool) -> Result<Vec<
     check_icon(plugin_dir, &manifest, "CategoryIcon", &mut errors);
     check_code_paths(plugin_dir, &manifest, require_all_os, &mut errors);
 
+    let minimum_version = manifest
+        .get("Software")
+        .and_then(|s| s.get("MinimumVersion"))
+        .and_then(Value::as_str)
+        .and_then(major_minor);
+
     if let Some(actions) = manifest.get("Actions").and_then(Value::as_array) {
+        let mut seen_uuids = std::collections::HashSet::new();
         for action in actions {
+            if let Some(action_uuid) = action.get("UUID").and_then(Value::as_str) {
+                if !seen_uuids.insert(action_uuid) {
+                    errors.push(format!("duplicate action UUID `{action_uuid}`"));
+                }
+                if has_valid_id && !action_uuid.starts_with(&format!("{uuid}.")) {
+                    warnings.push(format!(
+                        "action UUID `{action_uuid}` should be prefixed with `{uuid}.`"
+                    ));
+                }
+            }
+            let uses_neo = action
+                .get("Controllers")
+                .and_then(Value::as_array)
+                .is_some_and(|c| c.iter().any(|v| v.as_str() == Some("Neo")));
+            if uses_neo && minimum_version.is_some_and(|v| v < NEO_MINIMUM_VERSION) {
+                errors.push(format!(
+                    "action `{}` uses the Neo controller, which requires Software.MinimumVersion {}.{} or later",
+                    action.get("UUID").and_then(Value::as_str).unwrap_or("?"),
+                    NEO_MINIMUM_VERSION.0,
+                    NEO_MINIMUM_VERSION.1
+                ));
+            }
             check_icon_value(
                 plugin_dir,
                 action.get("Icon").and_then(Value::as_str),
@@ -110,7 +154,15 @@ fn validate_plugin_inner(plugin_dir: &Path, require_all_os: bool) -> Result<Vec<
         }
     }
 
-    Ok(errors)
+    Ok(Report { errors, warnings })
+}
+
+/// `major.minor` of a manifest version string such as `"7.6"` or `"7.6.0.0"`.
+fn major_minor(version: &str) -> Option<(u32, u32)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().map_or(Some(0), |m| m.parse().ok())?;
+    Some((major, minor))
 }
 
 pub(crate) fn is_valid_plugin_version(version: &str) -> bool {
@@ -290,7 +342,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let plugin = dir.path().join("com.example.test.sdPlugin");
         std::fs::create_dir_all(&plugin).unwrap();
-        let errors = validate_plugin(&plugin).unwrap();
+        let errors = validate_plugin(&plugin).unwrap().errors;
         assert!(
             errors
                 .iter()
@@ -312,7 +364,7 @@ mod tests {
                 "CodePathWin": "C:\\Windows\\outside.exe"
             }"#,
         );
-        let errors = validate_plugin(&plugin).unwrap();
+        let errors = validate_plugin(&plugin).unwrap().errors;
         assert!(
             errors
                 .iter()
@@ -348,7 +400,7 @@ mod tests {
         );
         std::fs::create_dir_all(plugin.join("bin")).unwrap();
         std::fs::write(plugin.join("bin/os"), b"mac").unwrap();
-        let errors = validate_plugin_for_pack(&plugin).unwrap();
+        let errors = validate_plugin_for_pack(&plugin).unwrap().errors;
         assert!(
             errors
                 .iter()
@@ -381,12 +433,79 @@ mod tests {
         std::fs::write(plugin.join("imgs/plugin/marketplace.svg"), b"<svg/>").unwrap();
         std::fs::write(plugin.join("imgs/actions/icon.svg"), b"<svg/>").unwrap();
         std::fs::write(plugin.join("imgs/actions/key.svg"), b"<svg/>").unwrap();
-        let errors = validate_plugin(&plugin).unwrap();
+        let errors = validate_plugin(&plugin).unwrap().errors;
         assert!(
             !errors.iter().any(|e| e.contains("missing Icon")
                 || e.contains("missing action Icon")
                 || e.contains("missing state Image")),
             "expected SVG icons to validate, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn reports_duplicate_and_unprefixed_action_uuids() {
+        let dir = tempdir().unwrap();
+        let plugin = dir.path().join("com.example.ids.sdPlugin");
+        write_plugin(
+            &plugin,
+            r#"{
+                "UUID": "com.example.ids",
+                "Version": "0.1.0.0",
+                "CodePathMac": "bin/plugin",
+                "CodePathWin": "bin/plugin.exe",
+                "Actions": [
+                    { "UUID": "com.example.ids.one" },
+                    { "UUID": "com.example.ids.one" },
+                    { "UUID": "com.example.idsother" }
+                ]
+            }"#,
+        );
+        let report = validate_plugin(&plugin).unwrap();
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("duplicate action UUID `com.example.ids.one`")),
+            "{report:?}"
+        );
+        assert_eq!(report.warnings.len(), 1, "{report:?}");
+        assert!(
+            report.warnings[0]
+                .contains("`com.example.idsother` should be prefixed with `com.example.ids.`")
+        );
+    }
+
+    #[test]
+    fn neo_controller_requires_stream_deck_7_6() {
+        let dir = tempdir().unwrap();
+        let plugin = dir.path().join("com.example.neo.sdPlugin");
+        let manifest = |min: &str| {
+            format!(
+                r#"{{
+                    "UUID": "com.example.neo",
+                    "Version": "0.1.0.0",
+                    "CodePathMac": "bin/plugin",
+                    "CodePathWin": "bin/plugin.exe",
+                    "Software": {{ "MinimumVersion": "{min}" }},
+                    "Actions": [{{ "UUID": "com.example.neo.bar", "Controllers": ["Neo"] }}]
+                }}"#
+            )
+        };
+        write_plugin(&plugin, &manifest("7.1"));
+        let report = validate_plugin(&plugin).unwrap();
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("requires Software.MinimumVersion 7.6")),
+            "{report:?}"
+        );
+
+        write_plugin(&plugin, &manifest("7.6"));
+        let report = validate_plugin(&plugin).unwrap();
+        assert!(
+            !report.errors.iter().any(|e| e.contains("Neo controller")),
+            "{report:?}"
         );
     }
 }

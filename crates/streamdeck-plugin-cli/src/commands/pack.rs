@@ -35,16 +35,19 @@ pub fn run(
 
     let version_guard = ManifestVersion::apply(&plugin_dir, version.as_deref())?;
 
-    let errors = validate_plugin_for_pack(&plugin_dir)?;
-    if !errors.is_empty() {
-        for error in &errors {
+    let report = validate_plugin_for_pack(&plugin_dir)?;
+    for warning in &report.warnings {
+        println!("{}", warning.yellow());
+    }
+    if !report.errors.is_empty() {
+        for error in &report.errors {
             println!("{}", error.yellow());
         }
         if ignore_validation {
             println!("Ignore validation flag found, bypassing validation errors");
         } else {
             version_guard.restore();
-            bail!("validation failed with {} error(s)", errors.len());
+            bail!("validation failed with {} error(s)", report.errors.len());
         }
     }
 
