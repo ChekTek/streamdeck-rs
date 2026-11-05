@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use streamdeck::{KeyDownEvent, SingletonAction, StreamDeck, WillAppearEvent};
+use streamdeck::{Action, KeyDownEvent, SingletonAction, StreamDeck, WillAppearEvent};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct CounterSettings {
@@ -15,8 +15,14 @@ impl SingletonAction for IncrementCounter {
 
     async fn on_will_appear(&self, ev: WillAppearEvent<Self::Settings>) {
         let count = ev.payload.settings.count;
-        if let Some(key) = ev.action.as_key() {
-            let _ = key.set_title(count.to_string()).await;
+        match &ev.action {
+            Action::Key(key) => {
+                let _ = key.set_title(count.to_string()).await;
+            }
+            Action::Dial(dial) => {
+                let _ = dial.set_title(count.to_string()).await;
+            }
+            Action::NeoInfobar(_) => {}
         }
     }
 

@@ -10,7 +10,7 @@ cargo run -p streamdeck-plugin-cli -- create
 
 The CLI writes a path dependency on this workspace’s `crates/streamdeck-plugin`. Override that with `STREAMDECK_PLUGIN_PATH` if the CLI binary was built from a different checkout.
 
-The executable is `streamdeck-plugin`. It does not replace Elgato’s Node CLI (`streamdeck` / `sd` from `@elgato/cli`).
+The executable is `streamdeck-plugin`. It does not replace Elgato’s Node CLI (`streamdeck` / `sd` from `@elgato/cli`). Commands and template mirror `@elgato/cli` 1.10.4.
 
 ## Commands
 
@@ -24,7 +24,7 @@ The executable is `streamdeck-plugin`. It does not replace Elgato’s Node CLI (
 | `stop\|s <uuid>` | `streamdeck://plugins/stop/<uuid>` |
 | `dev [-d]` | Enable or disable Stream Deck developer mode. |
 | `build [path]` | `cargo build --release` and copy the binary into `{uuid}.sdPlugin/bin/`. |
-| `validate [path]` | Light checks: folder name, manifest JSON, UUID match, current-platform `CodePath`, referenced icons (PNG or SVG). |
+| `validate [path]` | Light checks: folder name, manifest JSON, UUID match, action UUIDs (unique; warns when not prefixed with the plugin UUID), `Neo` controllers need `Software.MinimumVersion` 7.6, current-platform `CodePath`, referenced icons (PNG or SVG). |
 | `pack\|bundle [path]` | Zip the `.sdPlugin` to `{uuid}.streamDeckPlugin`. Honors `.sdignore`. |
 
 Plugin install paths:
