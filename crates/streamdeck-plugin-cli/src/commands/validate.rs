@@ -118,7 +118,9 @@ fn validate_plugin_inner(plugin_dir: &Path, require_all_os: bool) -> Result<Repo
                 .get("Controllers")
                 .and_then(Value::as_array)
                 .is_some_and(|c| c.iter().any(|v| v.as_str() == Some("Neo")));
-            if uses_neo && minimum_version.is_some_and(|v| v < NEO_MINIMUM_VERSION) {
+            // A missing or unparseable MinimumVersion cannot satisfy the 7.6 requirement.
+            let meets_neo_minimum = minimum_version.is_some_and(|v| v >= NEO_MINIMUM_VERSION);
+            if uses_neo && !meets_neo_minimum {
                 errors.push(format!(
                     "action `{}` uses the Neo controller, which requires Software.MinimumVersion {}.{} or later",
                     action.get("UUID").and_then(Value::as_str).unwrap_or("?"),
@@ -479,29 +481,40 @@ mod tests {
     fn neo_controller_requires_stream_deck_7_6() {
         let dir = tempdir().unwrap();
         let plugin = dir.path().join("com.example.neo.sdPlugin");
-        let manifest = |min: &str| {
+        // `software` is the raw JSON for the "Software" value, or None to omit it.
+        let manifest = |software: Option<&str>| {
+            let software = software.map_or(String::new(), |s| format!(r#""Software": {s},"#));
             format!(
                 r#"{{
                     "UUID": "com.example.neo",
                     "Version": "0.1.0.0",
                     "CodePathMac": "bin/plugin",
                     "CodePathWin": "bin/plugin.exe",
-                    "Software": {{ "MinimumVersion": "{min}" }},
+                    {software}
                     "Actions": [{{ "UUID": "com.example.neo.bar", "Controllers": ["Neo"] }}]
                 }}"#
             )
         };
-        write_plugin(&plugin, &manifest("7.1"));
-        let report = validate_plugin(&plugin).unwrap();
-        assert!(
-            report
-                .errors
-                .iter()
-                .any(|e| e.contains("requires Software.MinimumVersion 7.6")),
-            "{report:?}"
-        );
+        let rejected = [
+            Some(r#"{ "MinimumVersion": "7.1" }"#),
+            Some(r#"{ "MinimumVersion": "7.x" }"#),
+            Some(r#"{ "MinimumVersion": 7.6 }"#),
+            Some("{}"),
+            None,
+        ];
+        for software in rejected {
+            write_plugin(&plugin, &manifest(software));
+            let report = validate_plugin(&plugin).unwrap();
+            assert!(
+                report
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("requires Software.MinimumVersion 7.6")),
+                "Software = {software:?}: {report:?}"
+            );
+        }
 
-        write_plugin(&plugin, &manifest("7.6"));
+        write_plugin(&plugin, &manifest(Some(r#"{ "MinimumVersion": "7.6" }"#)));
         let report = validate_plugin(&plugin).unwrap();
         assert!(
             !report.errors.iter().any(|e| e.contains("Neo controller")),
