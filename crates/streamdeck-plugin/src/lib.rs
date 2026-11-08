@@ -52,6 +52,17 @@ use crate::runtime::{Runtime, set_runtime, try_runtime};
 /// `resvg`) on a worker can overflow the 2 MiB default and SIGSEGV.
 pub const PLUGIN_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// How long [`wait_for_host_termination`] waits for Stream Deck to end the
+/// process after the connection closes.
+///
+/// Stream Deck stops a plugin by closing the WebSocket and killing the
+/// process roughly 200 ms later. A plugin that exits on its own inside that
+/// window is recorded as an unexpected termination, and Stream Deck 8 then
+/// sometimes rejects the next launch of the same plugin with "Attempt to
+/// register unexpected connection" (observed with stop/restart and
+/// uninstall/reinstall). Only an absent host reaches this timeout.
+pub const HOST_TERMINATION_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Plugin facade, equivalent to the TypeScript `streamDeck` object.
 #[derive(Clone)]
 pub struct StreamDeck {
@@ -208,11 +219,34 @@ pub fn i18n() -> Result<I18n> {
     Ok(I18n::from(try_runtime()?.as_ref()))
 }
 
+/// Wait for Stream Deck to terminate the process once the connection has closed.
+///
+/// Returns immediately while the connection is open or was never established.
+/// Otherwise it sleeps for [`HOST_TERMINATION_GRACE`] so that Stream Deck, not
+/// the plugin, ends the process (see the constant for why that matters).
+/// [`block_on`] calls this after the plugin future completes; plugins that run
+/// their own Tokio runtime should call it last, after their own cleanup.
+pub async fn wait_for_host_termination() {
+    let Ok(runtime) = try_runtime() else { return };
+    if !runtime.connection_closed() {
+        return;
+    }
+    runtime
+        .logger
+        .create_scope("Connection")
+        .info("connection closed; waiting for Stream Deck to end the process");
+    tokio::time::sleep(HOST_TERMINATION_GRACE).await;
+}
+
 /// Run a plugin future on a multi-thread Tokio runtime with an 8 MiB worker stack.
 ///
 /// Prefer [`tokio::task::spawn_blocking`] for heavy CPU work inside action handlers
 /// (`resvg`, font shaping, image encode). This helper is a safety net for the
 /// process so those stacks are less likely to overflow.
+///
+/// After the future completes, [`wait_for_host_termination`] runs so a plugin
+/// whose connection was closed by Stream Deck is terminated by Stream Deck
+/// rather than exiting on its own.
 pub fn block_on<T, E>(
     fut: impl Future<Output = std::result::Result<T, E>>,
 ) -> std::result::Result<T, E>
@@ -223,5 +257,9 @@ where
         .enable_all()
         .thread_stack_size(PLUGIN_THREAD_STACK_SIZE)
         .build()?
-        .block_on(fut)
+        .block_on(async {
+            let output = fut.await;
+            wait_for_host_termination().await;
+            output
+        })
 }
