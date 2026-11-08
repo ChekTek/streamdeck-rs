@@ -63,12 +63,14 @@ pub const HOST_TERMINATION_GRACE: std::time::Duration = std::time::Duration::fro
 
 /// Pause between the WebSocket handshake and the `registerPlugin` event.
 ///
-/// Stream Deck 8 binds a freshly accepted socket to the plugin asynchronously.
-/// A registration processed before that finishes is rejected with
-/// `Attempt to register unexpected connection`, and the plugin then never
-/// receives events. Node plugins never register quickly enough to hit this;
-/// a native plugin registering right after the handshake hit it in about 40%
-/// of launches, and 25 ms was enough to avoid it in testing.
+/// Stream Deck 7.6 and later only accept a registration once the plugin host
+/// has seen QProcess's `started` signal, which is queued on the main thread
+/// and can arrive after a fast native plugin has already registered. An early
+/// registration is rejected with `Attempt to register unexpected connection`
+/// and cannot be retried; the plugin never receives events. Registering right
+/// after the handshake lost that race in about 40% of launches; 25 ms was
+/// enough to avoid it in testing, and the rest is margin for a busy host.
+/// This is a workaround for host scheduling, not a protocol requirement.
 pub const REGISTRATION_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Plugin facade, equivalent to the TypeScript `streamDeck` object.
