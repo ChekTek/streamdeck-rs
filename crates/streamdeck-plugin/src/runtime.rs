@@ -146,6 +146,8 @@ pub struct Runtime {
     pub device_store: DeviceStore,
     pub settings_cache: Mutex<HashMap<String, Value>>,
     legacy_settings_behavior: AtomicBool,
+    /// Set once the WebSocket read loop ends, whatever the reason.
+    connection_closed: AtomicBool,
     pub(crate) registered: RwLock<Vec<Arc<dyn ErasedAction>>>,
     pub listeners: EventListeners,
     pub ui: UiState,
@@ -182,6 +184,7 @@ impl Runtime {
             device_store: DeviceStore::default(),
             settings_cache: Mutex::new(HashMap::new()),
             legacy_settings_behavior: AtomicBool::new(false),
+            connection_closed: AtomicBool::new(false),
             registered: RwLock::new(Vec::new()),
             listeners: EventListeners::new(),
             ui: UiState::new(),
@@ -225,6 +228,16 @@ impl Runtime {
             "Default onDidReceiveSettings/onDidReceiveGlobalSettings behavior",
             self,
         )
+    }
+
+    /// Whether the connection to Stream Deck has ended (closed by Stream Deck,
+    /// failed, or dropped).
+    pub fn connection_closed(&self) -> bool {
+        self.connection_closed.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn mark_connection_closed(&self) {
+        self.connection_closed.store(true, Ordering::SeqCst);
     }
 
     pub fn take_outgoing_rx(&self) -> Option<mpsc::UnboundedReceiver<String>> {

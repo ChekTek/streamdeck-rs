@@ -111,6 +111,7 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
                 }
             }
         }
+        reader_runtime.mark_connection_closed();
         drop(dispatch_tx);
         match worker.await {
             Ok(()) => read_result,
@@ -819,6 +820,41 @@ mod tests {
         assert_eq!(cmd["context"], "context123");
         assert_eq!(cmd["payload"]["title"], "Hello world");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), plugin).await;
+    }
+
+    #[tokio::test]
+    async fn marks_connection_closed_when_stream_deck_closes_the_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let info = info_json();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let _registration = ws.next().await.unwrap().unwrap();
+            let _ = ws.close(None).await;
+        });
+
+        let deck = StreamDeck::from_args([
+            "-port",
+            &port.to_string(),
+            "-pluginUUID",
+            "abc123",
+            "-registerEvent",
+            "registerPlugin",
+            "-info",
+            &info,
+        ])
+        .unwrap();
+        let probe = deck.clone();
+        assert!(!probe.runtime.connection_closed());
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), deck.connect())
+            .await
+            .expect("connect returned after the socket closed");
+        assert!(result.is_ok(), "{result:?}");
+        assert!(probe.runtime.connection_closed());
+        let _ = server.await;
     }
 
     #[tokio::test]

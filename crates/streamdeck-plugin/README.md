@@ -65,6 +65,8 @@ fn main() -> streamdeck::Result<()> {
 
 Register every action **before** `connect()`. `connect()` runs until Stream Deck closes the socket.
 
+Stream Deck stops a plugin by closing the socket and killing the process about 200 ms later. If the process exits on its own inside that window, Stream Deck 8 logs an unexpected termination and sometimes rejects the plugin's next launch (`Attempt to register unexpected connection`), which shows up as a plugin that fails to start after a restart or reinstall. `streamdeck::block_on` therefore calls `streamdeck::wait_for_host_termination()` after the plugin future completes: when the connection has closed it waits up to `HOST_TERMINATION_GRACE` (5 s) for Stream Deck to end the process. Do any cleanup after `connect()` returns, before `block_on` finishes. Plugins that run their own Tokio runtime should call `wait_for_host_termination().await` last.
+
 `streamdeck::block_on` starts Tokio with 8 MiB worker stacks. Default Tokio stacks are 2 MiB; rasterizing a key image (`resvg`, font shaping) on a worker can SIGSEGV. Prefer `tokio::task::spawn_blocking` for that work anyway. Panics in action callbacks are logged and do not stop the plugin.
 
 After `StreamDeck::new()`, process-wide accessors match the TypeScript `streamDeck.*` namespaces: `streamdeck::logger()`, `streamdeck::settings()`, `streamdeck::devices()`, `streamdeck::system()`, `streamdeck::ui()`, `streamdeck::profiles()`, `streamdeck::i18n()`, `streamdeck::info()`.
