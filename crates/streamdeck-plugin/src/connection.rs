@@ -36,6 +36,8 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
     let url = runtime.registration.websocket_url();
     let (ws, _) = tokio_tungstenite::connect_async(&url).await?;
     let mut ws = ws;
+    // Let Stream Deck finish binding the socket before registering; see REGISTRATION_DELAY.
+    tokio::time::sleep(crate::REGISTRATION_DELAY).await;
 
     let register = RegisterEvent {
         event: runtime.registration.register_event.clone(),
@@ -855,6 +857,54 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
         assert!(probe.runtime.connection_closed());
         let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn registers_only_after_the_registration_delay() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let info = info_json();
+
+        // The server clock starts when its side of the handshake completes, which is
+        // before the client's `connect_async` returns, so a delay placed before the
+        // handshake would not count toward the measured gap.
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let handshake_done = std::time::Instant::now();
+            let registration = ws.next().await.unwrap().unwrap();
+            let gap = handshake_done.elapsed();
+            let _ = ws.close(None).await;
+            (registration, gap)
+        });
+
+        let deck = StreamDeck::from_args([
+            "-port",
+            &port.to_string(),
+            "-pluginUUID",
+            "abc123",
+            "-registerEvent",
+            "registerPlugin",
+            "-info",
+            &info,
+        ])
+        .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), deck.connect())
+            .await
+            .expect("connect returned after the socket closed");
+
+        let (registration, gap) = server.await.unwrap();
+        assert!(
+            gap >= crate::REGISTRATION_DELAY,
+            "registered {gap:?} after the handshake, expected at least {:?}",
+            crate::REGISTRATION_DELAY
+        );
+        let Message::Text(text) = registration else {
+            panic!("expected a text registration frame")
+        };
+        let reg: Value = serde_json::from_str(text.as_str()).unwrap();
+        assert_eq!(reg["event"], "registerPlugin");
+        assert_eq!(reg["uuid"], "abc123");
     }
 
     #[tokio::test]
