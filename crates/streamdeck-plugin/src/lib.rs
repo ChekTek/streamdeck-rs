@@ -57,11 +57,19 @@ pub const PLUGIN_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
 ///
 /// Stream Deck stops a plugin by closing the WebSocket and killing the
 /// process roughly 200 ms later. A plugin that exits on its own inside that
-/// window is recorded as an unexpected termination, and Stream Deck 8 then
-/// sometimes rejects the next launch of the same plugin with "Attempt to
-/// register unexpected connection" (observed with stop/restart and
-/// uninstall/reinstall). Only an absent host reaches this timeout.
+/// window is recorded as an unexpected termination. Only an absent host
+/// reaches this timeout.
 pub const HOST_TERMINATION_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Pause between the WebSocket handshake and the `registerPlugin` event.
+///
+/// Stream Deck 8 binds a freshly accepted socket to the plugin asynchronously.
+/// A registration processed before that finishes is rejected with
+/// `Attempt to register unexpected connection`, and the plugin then never
+/// receives events. Node plugins never register quickly enough to hit this;
+/// a native plugin registering right after the handshake hit it in about 40%
+/// of launches, and 25 ms was enough to avoid it in testing.
+pub const REGISTRATION_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Plugin facade, equivalent to the TypeScript `streamDeck` object.
 #[derive(Clone)]

@@ -36,6 +36,8 @@ pub async fn start(runtime: Arc<Runtime>) -> Result<tokio::task::JoinHandle<Resu
     let url = runtime.registration.websocket_url();
     let (ws, _) = tokio_tungstenite::connect_async(&url).await?;
     let mut ws = ws;
+    // Let Stream Deck finish binding the socket before registering; see REGISTRATION_DELAY.
+    tokio::time::sleep(crate::REGISTRATION_DELAY).await;
 
     let register = RegisterEvent {
         event: runtime.registration.register_event.clone(),
